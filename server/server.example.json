@@ -1,0 +1,23 @@
+{
+  "listen": "0.0.0.0:8636",
+  "server_cert": "/etc/weldap/tls/server.crt",
+  "server_key": "/etc/weldap/tls/server.key",
+  "device_ca": "/etc/weldap/device-ca/device-ca.crt",
+  "device_crl": "/etc/weldap/device-ca/device-ca.crl",
+  "password_keys": [
+    { "kid": "k2", "private_key": "/etc/weldap/secrets/password-k2.key" },
+    { "kid": "k1", "private_key": "/etc/weldap/secrets/password-k1.key" }
+  ],
+  "directory": {
+    "host": "ldap.example.org", "port": 636, "server_name": "ldap.example.org",
+    "ca": "/etc/weldap/tls/directory-ca.crt",
+    "user_dn_template": "uid={0},ou=people,dc=example,dc=org",
+    "users_group": "cn=weldap-users,ou=groups,dc=example,dc=org",
+    "admins_group": "cn=weldap-admins,ou=groups,dc=example,dc=org",
+    "service_dn": "cn=weldap-server,ou=services,dc=example,dc=org",
+    "service_password_file": "/etc/weldap/secrets/directory-service-password",
+    "timeout_seconds": 5
+  },
+  "max_connections": 64,
+  "max_clock_skew_seconds": 120
+}

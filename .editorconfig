@@ -1,0 +1,60 @@
+# Editor/format settings for the C# code (client/, tests/); client/check.sh runs `dotnet format --verify-no-changes`
+# against them.
+root = true
+
+# Only the .NET files: C++, PowerShell, Rust etc. are left to their own conventions (some are CRLF on purpose).
+[*.{cs,csproj,props,targets,runsettings}]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.cs]
+indent_size = 4
+max_line_length = 120
+
+# Layout as written: Allman braces, file-scoped namespaces, usings outside, System first.
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+csharp_preserve_single_line_statements = true
+csharp_preserve_single_line_blocks = true
+csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_using_directive_placement = outside_namespace:suggestion
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+
+# Preferences as written (not enforced as errors).
+csharp_style_var_for_built_in_types = true:silent
+csharp_style_var_when_type_is_apparent = true:silent
+csharp_style_var_elsewhere = true:silent
+csharp_prefer_braces = when_multiline:silent
+csharp_style_expression_bodied_methods = when_on_single_line:silent
+csharp_style_expression_bodied_properties = true:silent
+csharp_style_prefer_primary_constructors = true:silent
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion
+
+[*.{csproj,props,targets,runsettings}]
+indent_size = 2
+
+# Weldap.Core builds with AnalysisLevel=latest-all. Each rule turned off here is turned off for a stated reason.
+[client/Weldap.Core/**.cs]
+# Nullable reference types are on and warnings are errors: a null argument does not compile in this solution.
+dotnet_diagnostic.CA1062.severity = none
+# Secrets live in pinned arrays that are zeroed in place (SealedPassword, LoginReply.LocalPassword); a property
+# returning a copy or a read-only wrapper would scatter copies that are never zeroed.
+dotnet_diagnostic.CA1819.severity = none
+# LocalAccountException always carries the Win32 error code; the parameterless/inner-exception ctors would invite
+# throws without one.
+dotnet_diagnostic.CA1032.severity = none
+# AuditKind values are Windows Event Log event IDs; 0 is not an event and must not be writable by default.
+dotnet_diagnostic.CA1008.severity = none
+# ReplyResult is the byte on the pipe; byte-backed by design (mirrored in WeldapProtocol.h).
+dotnet_diagnostic.CA1028.severity = none

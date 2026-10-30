@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WELDAP MSI (FR-14): installs the service and credential provider and writes the config key,
+  locked to SYSTEM + Administrators (SR-10). Deployment-neutral: the server's address and keys come from
+  the command line (see installer/fleet/ for a deployment's values), e.g.
+    msiexec /i Weldap-x64.msi /qn SERVERHOST=weldap.example.org SERVERPINS=<base64 SHA-256 of its TLS key>
+        SERVERKEY=<base64 HPKE public key> SERVERKEYID=k1 EXCLUDEDACCOUNTS="administrator,breakglass"
+  The device certificate comes later, from installer/fleet/register-device.ps1.
+  Uninstall removes the binaries, service, provider registration and config; local accounts,
+  the WELDAP-Managed group and profiles stay (the service creates WELDAP-Managed on first start).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="WELDAP" Manufacturer="WELDAP" Version="$(var.ProductVersion)"
+           UpgradeCode="EFF70307-E41B-42C1-8CAD-AB4A058A9BD4" Scope="perMachine" InstallerVersion="500">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of WELDAP is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Required per deployment. The device knows only the WELDAP server: where it is, the pin of its TLS key (the
+         only server trust: no CA), and its PUBLIC password key (HPKE, P-256, base64). Nothing about the directory. -->
+    <Property Id="SERVERHOST" Secure="yes" />
+    <Property Id="SERVERPINS" Secure="yes" />
+    <Property Id="SERVERKEY" Secure="yes" />
+    <Property Id="SERVERKEYID" Secure="yes" />
+    <Launch Condition="Installed OR (SERVERHOST AND SERVERPINS AND SERVERKEY AND SERVERKEYID)"
+            Message="WELDAP needs SERVERHOST, SERVERPINS, SERVERKEY and SERVERKEYID on the msiexec command line." />
+
+    <Property Id="SERVERPORT" Value="636" Secure="yes" />
+    <Property Id="EXCLUDEDACCOUNTS" Value="administrator" Secure="yes" />
+    <Property Id="MAXOFFLINEDAYS" Value="180" Secure="yes" />
+    <Property Id="OFFLINEMAXFAILURES" Value="10" Secure="yes" />
+    <Property Id="TILELABEL" Value="WELDAP sign-in" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="WELDAP" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="WELDAP">
+      <ComponentRef Id="Service" />
+      <ComponentRef Id="Provider" />
+      <ComponentRef Id="Config" />
+    </Feature>
+
+    <Component Id="Service" Directory="INSTALLFOLDER">
+      <File Id="ServiceExe" Source="$(var.ServiceDir)\WeldapService.exe" KeyPath="yes" />
+      <!-- FR-13: Event Viewer reads the event text through this message DLL. -->
+      <File Id="EventLogMessagesDll" Source="$(var.ServiceDir)\System.Diagnostics.EventLog.Messages.dll" />
+      <util:EventSource Name="WELDAP" Log="Application" EventMessageFile="[#EventLogMessagesDll]" />
+      <ServiceInstall Name="Weldap" DisplayName="WELDAP Service"
+                      Description="Relays sealed sign-ins to the WELDAP server and keeps managed local accounts in step."
+                      Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes">
+        <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                            ThirdFailureActionType="restart" RestartServiceDelayInSeconds="5" ResetPeriodInDays="1" />
+      </ServiceInstall>
+      <ServiceControl Id="ServiceControl" Name="Weldap" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+    </Component>
+
+    <Component Id="Provider" Directory="INSTALLFOLDER">
+      <File Id="ProviderDll" Source="$(var.ProviderDir)\WeldapCredentialProvider.dll" KeyPath="yes" />
+      <RegistryKey Root="HKLM"
+                   Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$(var.ProviderClsid)">
+        <RegistryValue Type="string" Value="WeldapCredentialProvider" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\CLSID\$(var.ProviderClsid)">
+        <RegistryValue Type="string" Value="WeldapCredentialProvider" />
+        <RegistryKey Key="InprocServer32">
+          <RegistryValue Type="string" Value="[#ProviderDll]" />
+          <RegistryValue Name="ThreadingModel" Type="string" Value="Apartment" />
+        </RegistryKey>
+      </RegistryKey>
+    </Component>
+
+    <Component Id="Config" Directory="INSTALLFOLDER">
+      <RegistryKey Root="HKLM" Key="SOFTWARE\WELDAP" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
+        <!-- SR-10: owner Administrators; full control SYSTEM + Administrators; read for Users. -->
+        <PermissionEx Sddl="O:BAG:SYD:PAI(A;CI;KA;;;SY)(A;CI;KA;;;BA)(A;CI;KR;;;BU)" />
+        <RegistryValue Name="ServerHost" Type="string" Value="[SERVERHOST]" KeyPath="yes" />
+        <RegistryValue Name="ServerPort" Type="integer" Value="[SERVERPORT]" />
+        <RegistryValue Name="ServerPins" Type="multiString" Value="[SERVERPINS]" />
+        <RegistryValue Name="ServerKey" Type="string" Value="[SERVERKEY]" />
+        <RegistryValue Name="ServerKeyId" Type="string" Value="[SERVERKEYID]" />
+        <RegistryValue Name="ExcludedAccounts" Type="multiString" Value="[EXCLUDEDACCOUNTS]" />
+        <RegistryValue Name="MaxOfflineDays" Type="integer" Value="[MAXOFFLINEDAYS]" />
+        <RegistryValue Name="OfflineMaxFailures" Type="integer" Value="[OFFLINEMAXFAILURES]" />
+        <RegistryValue Name="TileLabel" Type="string" Value="[TILELABEL]" />
+        <!-- Anti-tamper: SHA-256 of the provider DLL shipped in this MSI; the service checks the registered DLL against it. -->
+        <RegistryValue Name="ProviderHash" Type="string" Value="$(var.ProviderHash)" />
+        <!-- Per-account secrets go in HKLM\SOFTWARE\WELDAP\Secret (SYSTEM only), created by the service. -->
+      </RegistryKey>
+    </Component>
+  </Package>
+</Wix>

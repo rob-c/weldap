@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# WELDAP device CA: registering a device = signing its CSR; the server admits only certificates from this CA
+# that are not on its CRL. Runs in its own container (or on an offline admin host), never inside the serving
+# server: the server only ever sees device-ca.crt and device-ca.crl.
+#
+#   weldap-ca init                         CA key + certificate, empty CRL
+#   weldap-ca sign <csr> <device>          signed certificate on stdout (subject forced to CN=<device>)
+#   weldap-ca revoke <device>              revoke its newest certificate, publish a new CRL
+#   weldap-ca crl                          publish a fresh CRL (it is valid 7 days: run at least weekly)
+#   weldap-ca list                         issued certificates and their status
+#
+# State:   $WELDAP_CA_DIR       (default /var/lib/weldap-ca)       CA key, database   -- keep offline/backed up
+# Publish: $WELDAP_PUBLISH_DIR  (default /var/lib/weldap-publish)  device-ca.crt + device-ca.crl, read by the server
+set -euo pipefail
+umask 077
+CA="${WELDAP_CA_DIR:-/var/lib/weldap-ca}"
+PUB="${WELDAP_PUBLISH_DIR:-/var/lib/weldap-publish}"
+NAME="${WELDAP_CA_NAME:-/O=WELDAP/CN=WELDAP Device CA}"
+DAYS="${WELDAP_DEVICE_DAYS:-90}"
+mkdir -p "$CA/issued" "$CA/devices" "$PUB"
+
+cat >"$CA/openssl.cnf" <<EOF
+[ca]
+default_ca = device_ca
+[device_ca]
+dir = $CA
+database = $CA/index.txt
+serial = $CA/serial
+crlnumber = $CA/crlnumber
+new_certs_dir = $CA/issued
+certificate = $PUB/device-ca.crt
+private_key = $CA/ca.key
+default_md = sha256
+default_days = $DAYS
+default_crl_days = 7
+policy = any
+unique_subject = no
+copy_extensions = none
+x509_extensions = device
+crl_extensions = crl
+[any]
+commonName = supplied
+[device]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,clientAuth
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid
+[crl]
+authorityKeyIdentifier = keyid
+EOF
+
+publish_crl() {
+    openssl ca -config "$CA/openssl.cnf" -gencrl -out "$PUB/device-ca.crl.new" 2>/dev/null
+    chmod 644 "$PUB/device-ca.crl.new"
+    mv -f "$PUB/device-ca.crl.new" "$PUB/device-ca.crl"   # atomic: the server never reads half a CRL
+}
+
+case "${1:-}" in
+    init)
+        [[ -f "$CA/ca.key" ]] && { echo "device CA already exists in $CA" >&2; exit 1; }
+        : >"$CA/index.txt"; echo 1000 >"$CA/serial"; echo 1000 >"$CA/crlnumber"
+        openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$CA/ca.key"
+        # pathlen:0 + clientAuth-only EKU: this CA can never vouch for a server or another CA.
+        openssl req -x509 -new -key "$CA/ca.key" -sha256 -days 1825 -subj "$NAME" \
+            -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign" \
+            -addext "extendedKeyUsage=clientAuth" \
+            -out "$PUB/device-ca.crt"
+        chmod 644 "$PUB/device-ca.crt"
+        publish_crl
+        openssl x509 -in "$PUB/device-ca.crt" -noout -subject -fingerprint -sha256 ;;
+    sign)
+        csr="${2:?csr}"; dev="${3:?device name}"
+        [[ "$dev" =~ ^[a-z0-9-]{1,63}$ ]] || { echo "device name must be [a-z0-9-]{1,63}" >&2; exit 2; }
+        openssl req -in "$csr" -noout -verify >/dev/null 2>&1 || { echo "CSR signature invalid" >&2; exit 1; }
+        openssl ca -config "$CA/openssl.cnf" -batch -notext -in "$csr" -subj "/CN=$dev" \
+            -out "$CA/devices/$dev.crt" 2>/dev/null
+        cat "$CA/devices/$dev.crt" ;;
+    revoke)
+        dev="${2:?device name}"
+        openssl ca -config "$CA/openssl.cnf" -revoke "$CA/devices/$dev.crt" 2>/dev/null
+        publish_crl
+        echo "revoked $dev" ;;
+    crl) publish_crl; echo "CRL published: $(openssl crl -in "$PUB/device-ca.crl" -noout -nextupdate)" ;;
+    list) awk -F'\t' '{ printf "%s %s %s %s\n", $1 == "V" ? "valid  " : ($1 == "R" ? "revoked" : $1), $4, $2, $6 }' "$CA/index.txt" ;;
+    *) sed -n '2,13p' "$0"; exit 2 ;;
+esac

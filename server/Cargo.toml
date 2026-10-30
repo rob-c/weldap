@@ -1,0 +1,50 @@
+[package]
+name = "weldap-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "WELDAP server: client-authenticated, sealed-password front end for an LDAP directory"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "weldap-server"
+path = "src/main.rs"
+
+# Test client: seals a password the way the Windows credential provider does. Not in the runtime image.
+[[bin]]
+name = "weldap-probe"
+path = "src/bin/weldap-probe.rs"
+test = false # it includes seal.rs and secret.rs, whose tests run in the server's test binary
+
+[dependencies]
+# TLS: ring backend, no `logging` feature, so rustls itself can never log anything.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "1.10", features = ["std"] }
+x509-parser = "0.16"
+# HPKE (RFC 9180): DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-256-GCM.
+hpke = { version = "0.12", default-features = false, features = ["alloc", "p256"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+zeroize = "1"
+libc = "0.2"
+
+[dev-dependencies]
+# Test PKI (device CA, device certificates, CRLs, server certificates), generated per run: never checked in.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+time = { version = "0.3", features = ["std"] }
+
+[lints.clippy]
+# server/check.sh runs clippy with these as errors; exceptions are #[allow]s next to the code, each with a reason.
+pedantic = { level = "warn", priority = -1 }
+
+[profile.release]
+opt-level = 2
+debug = false
+strip = "symbols"
+panic = "abort"        # no unwinding through secret-holding frames; a panic ends the process
+overflow-checks = true
+lto = "thin"
+codegen-units = 1     # one unit: smaller, more-optimised, reproducible binary

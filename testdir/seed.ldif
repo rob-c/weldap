@@ -1,0 +1,100 @@
+# Test directory matching the production layout in the requirements doc.
+# Passwords are set by init.sh (not stored here).
+#
+#   alice  in win-users                 -> allowed, standard user
+#   bob    in win-users + win-admins    -> allowed, local admin
+#   carol  no Windows groups            -> denied (has an entry, not authorised)
+#   dave   in win-users                 -> cleanup tests: remove from win-users later
+#   administrator                       -> excluded name; WELDAP tile must refuse even with a valid bind
+
+dn: dc=example,dc=org
+objectClass: top
+objectClass: domain
+dc: example
+# Users may read only their own login attributes (doc: self-read ACI).
+aci: (target="ldap:///ou=people,dc=example,dc=org")(targetattr="memberOf || cn || displayName || uid")(version 3.0; acl "self-read"; allow (read, search, compare) userdn="ldap:///self";)
+# The service bind account (cleanup task) is read-only across people and groups.
+aci: (targetattr="uid || cn || displayName || memberOf || member || objectClass")(version 3.0; acl "readers"; allow (read, search, compare) groupdn="ldap:///cn=readers,ou=groups,dc=example,dc=org";)
+
+dn: ou=people,dc=example,dc=org
+objectClass: top
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=example,dc=org
+objectClass: top
+objectClass: organizationalUnit
+ou: groups
+
+dn: ou=services,dc=example,dc=org
+objectClass: top
+objectClass: organizationalUnit
+ou: services
+
+dn: uid=alice,ou=people,dc=example,dc=org
+objectClass: top
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Test
+sn: Test
+displayName: Alice Test
+
+dn: uid=bob,ou=people,dc=example,dc=org
+objectClass: top
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob Admin
+sn: Admin
+displayName: Bob Admin
+
+dn: uid=carol,ou=people,dc=example,dc=org
+objectClass: top
+objectClass: inetOrgPerson
+uid: carol
+cn: Carol Nogroup
+sn: Nogroup
+displayName: Carol Nogroup
+
+dn: uid=dave,ou=people,dc=example,dc=org
+objectClass: top
+objectClass: inetOrgPerson
+uid: dave
+cn: Dave Leaver
+sn: Leaver
+displayName: Dave Leaver
+
+dn: uid=administrator,ou=people,dc=example,dc=org
+objectClass: top
+objectClass: inetOrgPerson
+uid: administrator
+cn: Excluded Name
+sn: Name
+displayName: Excluded Name
+
+dn: cn=winlogin,ou=services,dc=example,dc=org
+objectClass: top
+objectClass: applicationProcess
+objectClass: simpleSecurityObject
+cn: winlogin
+userPassword: {CLEAR}placeholder
+
+dn: cn=readers,ou=groups,dc=example,dc=org
+objectClass: top
+objectClass: groupOfNames
+cn: readers
+member: cn=winlogin,ou=services,dc=example,dc=org
+
+dn: cn=win-users,ou=groups,dc=example,dc=org
+objectClass: top
+objectClass: groupOfNames
+cn: win-users
+member: uid=alice,ou=people,dc=example,dc=org
+member: uid=bob,ou=people,dc=example,dc=org
+member: uid=dave,ou=people,dc=example,dc=org
+member: uid=administrator,ou=people,dc=example,dc=org
+
+dn: cn=win-admins,ou=groups,dc=example,dc=org
+objectClass: top
+objectClass: groupOfNames
+cn: win-admins
+member: uid=bob,ou=people,dc=example,dc=org

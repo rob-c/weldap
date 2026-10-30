@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Platform-neutral login logic: protocol, validation, decisions. No Windows APIs here. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Weldap</RootNamespace>
+    <!-- Every analyzer rule (Directory.Build.props has latest-recommended); exceptions with reasons in /.editorconfig. -->
+    <AnalysisLevel>latest-all</AnalysisLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Weldap.Core.Tests" />
+  </ItemGroup>
+</Project>

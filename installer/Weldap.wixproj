@@ -1,0 +1,19 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!--
+    Build in the VM (needs Windows), one MSI per architecture:
+      dotnet build installer -c Release -p:InstallerPlatform=x64   -p:ServiceDir=..\out\service-win-x64   -p:ProviderDir=..\out\provider-x64
+      dotnet build installer -c Release -p:InstallerPlatform=arm64 -p:ServiceDir=..\out\service-win-arm64 -p:ProviderDir=..\out\provider-arm64
+  -->
+  <PropertyGroup>
+    <OutputName>Weldap-$(InstallerPlatform)</OutputName>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.1.0</ProductVersion>
+    <!-- Credential provider CLSID: must match client/Weldap.CredentialProvider/guid.h and register.ps1. -->
+    <ProviderClsid Condition="'$(ProviderClsid)' == ''">{E239AAAB-FFFD-4525-A894-1B9D6314B1CB}</ProviderClsid>
+    <ProviderHash Condition="'$(ProviderHash)' == ''">0000000000000000000000000000000000000000000000000000000000000000</ProviderHash>
+    <DefineConstants>ServiceDir=$(ServiceDir);ProviderDir=$(ProviderDir);ProductVersion=$(ProductVersion);ProviderClsid=$(ProviderClsid);ProviderHash=$(ProviderHash)</DefineConstants>
+    <SuppressValidation>false</SuppressValidation>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+</Project>

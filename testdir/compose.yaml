@@ -1,0 +1,52 @@
+# Local test environment: 389 DS + the WELDAP server. Run via ./up.sh.
+# Network surface: the server's one TLS port is published on loopback only (16637; the VMs reach it as
+# 10.0.2.2:16637 through QEMU's user-mode NAT). 389 DS sits on an internal network with no published port and
+# no route out: the WELDAP server is the only thing that can reach it.
+services:
+  dirsrv:
+    image: quay.io/389ds/dirsrv:latest
+    container_name: weldap-test-dirsrv
+    environment:
+      DS_DM_PASSWORD: ${DS_DM_PASSWORD:?run ./up.sh}
+      DS_SUFFIX_NAME: dc=example,dc=org
+    volumes:
+      - dirsrv-data:/data
+    restart: unless-stopped
+    networks:
+      directory:
+        aliases: [ldap.example.test]
+
+  server:
+    # WELDAP server (AlmaLinux 9): client mTLS + CRL, opens HPKE-sealed passwords, the only LDAP client.
+    image: weldap-server:latest
+    container_name: weldap-test-server
+    depends_on: [dirsrv]
+    user: "${WELDAP_UID:-10001}:${WELDAP_GID:-10001}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ulimits:
+      memlock: -1                # mlockall (no secret reaches swap) without any capability
+      core: 0
+    pids_limit: 256
+    mem_limit: 256m
+    volumes:
+      - ./.data/server/server.json:/etc/weldap/server.json:ro
+      - ./.data/server/password-k1.key:/etc/weldap/secrets/password-k1.key:ro
+      - ./.data/server/directory-service-password:/etc/weldap/secrets/directory-service-password:ro
+      - ./pki/weldap.crt:/etc/weldap/tls/server.crt:ro
+      - ./pki/private/weldap.key:/etc/weldap/tls/server.key:ro
+      - ./pki/ca.crt:/etc/weldap/tls/directory-ca.crt:ro
+      - ./pki/device-ca-pub:/etc/weldap/device-ca:ro
+    ports:
+      - "127.0.0.1:16637:8636"   # loopback only; the VMs use 10.0.2.2:16637
+    restart: unless-stopped
+    networks: [front, directory]
+
+networks:
+  front: {}
+  directory:
+    internal: true               # no published ports, no egress: 389 DS is reachable only from the server
+
+volumes:
+  dirsrv-data:

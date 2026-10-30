@@ -1,0 +1,41 @@
+# WELDAP server, production shape. Images: `docker build -t weldap-server server/` and
+# `docker build --target ca -t weldap-ca server/`. Copy to the server host, fill in /etc/weldap (see
+# server.example.json and README.md), then: docker compose up -d server
+# The device CA lives in its own volume and only runs on demand: docker compose run --rm ca <command>.
+services:
+  server:
+    image: weldap-server:latest          # AlmaLinux 9 micro, no shell or tools: only the server binary runs
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ulimits: { memlock: -1, core: 0 }  # memlock: mlockall without any capability
+    pids_limit: 256
+    mem_limit: 256m
+    ports: ["636:8636"]                 # the only thing this host exposes for WELDAP
+    volumes:
+      - /etc/weldap/server.json:/etc/weldap/server.json:ro
+      - /etc/weldap/secrets:/etc/weldap/secrets:ro       # password-<kid>.key (0400, uid 10001), directory-service-password
+      - /etc/weldap/tls:/etc/weldap/tls:ro               # server.crt/key (clients pin its key), directory-ca.crt
+      - weldap-publish:/etc/weldap/device-ca:ro          # device-ca.crt + device-ca.crl, written by `ca`
+    logging: { driver: json-file, options: { max-size: "50m", max-file: "10" } }
+
+  ca:
+    # Device CA: registration (sign), revocation, CRL. Never started with the server; no network at all.
+    image: weldap-ca:latest
+    profiles: [admin]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    user: "10001:10001"
+    environment:
+      WELDAP_CA_NAME: "/O=Example/CN=WELDAP Device CA"
+    volumes:
+      - weldap-ca:/var/lib/weldap-ca                     # CA key + database: back up, keep this host locked down
+      - weldap-publish:/var/lib/weldap-publish
+      - ./requests:/requests:ro                          # CSRs to sign
+
+volumes:
+  weldap-ca:
+  weldap-publish:
