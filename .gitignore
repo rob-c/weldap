@@ -15,6 +15,9 @@ out/
 .vs/
 x64/
 ARM64/
+# ...but server/src/bin/ is Rust binary-target *source* (weldap-probe), not build output.
+!server/src/bin/
+!server/src/bin/**
 # OS / editor
 .DS_Store
 *.swp
