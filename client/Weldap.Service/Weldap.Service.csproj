@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Windows service: pipe server, LDAPS (wldap32), local accounts (netapi32), event log. -->
+  <!-- Windows service: pipe server, TLS over TCP to the WELDAP server (SslStream, no LDAP on the client),
+       local accounts (netapi32), event log. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>

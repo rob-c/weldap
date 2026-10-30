@@ -127,7 +127,7 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
             Zero(pw);
         }
         // Mark it managed straight away, so a failure below still leaves it recognisably ours.
-        AddMember(_managedGroup, name);
+        ChangeMembership(_managedGroup, name, add: true);
         EnsureUser(name);
     }
 
@@ -167,14 +167,13 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
     public void SetAdmin(string name, bool admin)
     {
         RequireManaged(name);
-        if (admin) AddMember(_administrators, name);
-        else RemoveMember(_administrators, name);
+        ChangeMembership(_administrators, name, admin);
     }
 
     public void EnsureUser(string name)
     {
         RequireManaged(name);
-        AddMember(_users, name);
+        ChangeMembership(_users, name, add: true);
     }
 
     private void RequireManaged(string name)
@@ -209,7 +208,10 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
         if (rc != NERR_Success) throw new LocalAccountException($"set {name} level {level}: {rc}", (int)rc);
     }
 
-    private static void AddMember(string group, string user)
+    // Add (or, when add is false, remove) a local user to/from a group. The two directions differ only in the
+    // netapi32 call and the one "already in / not in the alias" code that counts as success (the end state is
+    // what we asked for), so they share one body rather than two near-identical ones.
+    private static void ChangeMembership(string group, string user, bool add)
     {
         var qualified = $"{Environment.MachineName}\\{user}";
         uint rc;
@@ -217,24 +219,12 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
         fixed (char* u = qualified)
         {
             var member = new LOCALGROUP_MEMBERS_INFO_3 { lgrmi3_domainandname = u };
-            rc = NetLocalGroupAddMembers(null, g, 3, &member, 1);
+            rc = add ? NetLocalGroupAddMembers(null, g, 3, &member, 1)
+                     : NetLocalGroupDelMembers(null, g, 3, &member, 1);
         }
-        if (rc is not (NERR_Success or ERROR_MEMBER_IN_ALIAS))
-            throw new LocalAccountException($"add {user} to {group}: {rc}", (int)rc);
-    }
-
-    private static void RemoveMember(string group, string user)
-    {
-        var qualified = $"{Environment.MachineName}\\{user}";
-        uint rc;
-        fixed (char* g = group)
-        fixed (char* u = qualified)
-        {
-            var member = new LOCALGROUP_MEMBERS_INFO_3 { lgrmi3_domainandname = u };
-            rc = NetLocalGroupDelMembers(null, g, 3, &member, 1);
-        }
-        if (rc is not (NERR_Success or ERROR_MEMBER_NOT_IN_ALIAS))
-            throw new LocalAccountException($"remove {user} from {group}: {rc}", (int)rc);
+        var tolerated = add ? ERROR_MEMBER_IN_ALIAS : ERROR_MEMBER_NOT_IN_ALIAS;
+        if (rc != NERR_Success && rc != tolerated)
+            throw new LocalAccountException($"{(add ? $"add {user} to" : $"remove {user} from")} {group}: {rc}", (int)rc);
     }
 
     private static char[] Terminated(ReadOnlySpan<char> value)

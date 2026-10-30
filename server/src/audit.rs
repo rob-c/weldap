@@ -16,6 +16,10 @@ pub enum V<'a> {
     Id(&'a str),
 }
 
+/// Names safe to log verbatim (anything else is redacted to "?"). This is the *superset* rule: the UUN check
+/// (`server::valid_uun`) and the device-name check (`server::cert_device_name`) must each stay within it, so
+/// every name those accept logs as itself. `audit` is deliberately dependency-free, so the predicate is
+/// duplicated here rather than shared across that boundary.
 fn is_identifier(s: &str) -> bool {
     !s.is_empty() && s.len() <= 63 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }

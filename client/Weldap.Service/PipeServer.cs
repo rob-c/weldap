@@ -15,6 +15,9 @@ namespace Weldap.Service;
 internal sealed partial class PipeServer(Func<LoginRequest, LoginReply> handle, ILogger<PipeServer> log)
 {
     private const string Sddl = "O:SYG:SYD:P(D;;GA;;;NU)(A;;GA;;;SY)";
+    // Per-connection serve deadline, kept inside the credential provider's 15 s end-to-end budget
+    // (WELDAP_CLIENT_DEADLINE_MS) so the client is the side that gives up, never the service.
+    private const int DeadlineSeconds = 14;
     private static readonly SecurityIdentifier LocalSystem = new(WellKnownSidType.LocalSystemSid, null);
 
     public async Task RunAsync(CancellationToken stop)
@@ -50,7 +53,7 @@ internal sealed partial class PipeServer(Func<LoginRequest, LoginReply> handle, 
     private async Task ServeOneAsync(NamedPipeServerStream pipe, CancellationToken stop)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
-        deadline.CancelAfter(TimeSpan.FromSeconds(14)); // inside the client's 15 s end-to-end budget
+        deadline.CancelAfter(TimeSpan.FromSeconds(DeadlineSeconds));
 
         var frame = await ProtocolCodec.ReadFrameAsync(pipe, deadline.Token).ConfigureAwait(false);
         if (frame is null) return;

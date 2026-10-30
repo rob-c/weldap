@@ -40,6 +40,8 @@ public sealed class LoginReply : IDisposable
     }
 
     public ReplyResult Result { get; }
+    /// <summary>Online vs offline sign-in. Meaningful only when <see cref="Result"/> is <see cref="ReplyResult.Ok"/>:
+    /// the Deny/Error factories always set Online, and <c>EncodeReply</c> writes the mode byte only in the Ok case.</summary>
     public SignInMode Mode { get; }
     public string Message { get; }
     public char[]? LocalPassword { get; }

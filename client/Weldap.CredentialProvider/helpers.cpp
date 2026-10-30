@@ -66,7 +66,7 @@ HRESULT FieldDescriptorCoAllocCopy(
 }
 
 //
-// Coppies rcpfd into the buffer pointed to by pcpfd. The caller is responsible for
+// Copies rcpfd into the buffer pointed to by pcpfd. The caller is responsible for
 // allocating pcpfd. This function uses CoTaskMemAlloc to allocate memory for
 // pcpfd->pszLabel.
 //
@@ -189,7 +189,7 @@ HRESULT KerbInteractiveUnlockLogonInit(
 
     // Note: this method uses custom logic to pack a KERB_INTERACTIVE_UNLOCK_LOGON with a
     // serialized credential.  We could replace the calls to UnicodeStringInitWithString
-    // and KerbInteractiveUnlockLogonPack with a single cal to CredPackAuthenticationBuffer,
+    // and KerbInteractiveUnlockLogonPack with a single call to CredPackAuthenticationBuffer,
     // but that API has a drawback: it returns a KERB_INTERACTIVE_UNLOCK_LOGON whose
     // MessageType is always KerbInteractiveLogon.
     //
@@ -259,7 +259,7 @@ HRESULT KerbInteractiveUnlockLogonInit(
 // rkiulIn.Logon.Password.Length = 16
 // rkiulIn.Logon.Password.Buffer = sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) + 14 + 10
 //
-// THere's more information on this at:
+// There's more information on this at:
 // http://msdn.microsoft.com/msdnmag/issues/05/06/SecurityBriefs/#void
 //
 
@@ -475,7 +475,7 @@ HRESULT ProtectIfNecessaryAndCopyPassword(
     if (pwzPassword && *pwzPassword)
     {
         // pwzPassword is const, but CredIsProtected takes a non-const string.
-        // So, ake a copy that we know isn't const.
+        // So, make a copy that we know isn't const.
         PWSTR pwzPasswordCopy;
         hr = SHStrDupW(pwzPassword, &pwzPasswordCopy);
         if (SUCCEEDED(hr))

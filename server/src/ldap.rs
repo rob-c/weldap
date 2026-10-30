@@ -70,6 +70,9 @@ fn int(tag: u8, v: u8) -> Vec<u8> {
 }
 
 // ---------- BER reading ----------
+// The long-form length decode (big-endian fold, bounded to 4 bytes) appears in `take` (slice-based),
+// `read_message` (stream-based) and `small_uint` rather than in one shared helper: the slice-vs-stream split
+// makes a common helper awkward, so the repetition is deliberate and each copy stays tiny and auditable.
 
 /// Splits one TLV off the front of `buf`: (tag, content, rest).
 fn take(buf: &[u8]) -> Result<(u8, &[u8], &[u8]), LdapError> {
@@ -97,6 +100,37 @@ fn small_uint(content: &[u8]) -> Result<u32, LdapError> {
         return Err(LdapError::Protocol);
     }
     Ok(content.iter().fold(0u32, |a, b| (a << 8) | u32::from(*b)))
+}
+
+/// Parse one `SearchResultEntry` body -- objectName (ignored) then the partialAttributeList -- into an `Entry`.
+/// Split out of `read_entry` so that function stays a flat message-dispatch loop.
+fn parse_entry(content: &[u8]) -> Result<Entry, LdapError> {
+    let (_, _name, rest) = take(content)?;
+    let (t, mut list, _) = take(rest)?;
+    if t != 0x30 {
+        return Err(LdapError::Protocol);
+    }
+    let mut attrs = Vec::new();
+    while !list.is_empty() {
+        let (t, one, rest) = take(list)?;
+        list = rest;
+        if t != 0x30 {
+            return Err(LdapError::Protocol);
+        }
+        let (_, name, rest) = take(one)?;
+        let (t, mut set, _) = take(rest)?;
+        if t != 0x31 {
+            return Err(LdapError::Protocol);
+        }
+        let mut values = Vec::new();
+        while !set.is_empty() {
+            let (_, v, rest) = take(set)?;
+            set = rest;
+            values.push(v.to_vec());
+        }
+        attrs.push((String::from_utf8_lossy(name).into_owned(), values));
+    }
+    Ok(Entry { attrs })
 }
 
 /// Read and write timeouts for a directory socket, as one fallible step (so the whole thing is one error
@@ -258,32 +292,7 @@ impl<S: Read + Write> Ldap<S> {
                     if entry.is_some() {
                         return Err(LdapError::Protocol); // base search: at most one entry
                     }
-                    let (_, _name, rest) = take(content)?;
-                    let (t, mut list, _) = take(rest)?;
-                    if t != 0x30 {
-                        return Err(LdapError::Protocol);
-                    }
-                    let mut attrs = Vec::new();
-                    while !list.is_empty() {
-                        let (t, one, rest) = take(list)?;
-                        list = rest;
-                        if t != 0x30 {
-                            return Err(LdapError::Protocol);
-                        }
-                        let (_, name, rest) = take(one)?;
-                        let (t, mut set, _) = take(rest)?;
-                        if t != 0x31 {
-                            return Err(LdapError::Protocol);
-                        }
-                        let mut values = Vec::new();
-                        while !set.is_empty() {
-                            let (_, v, rest) = take(set)?;
-                            set = rest;
-                            values.push(v.to_vec());
-                        }
-                        attrs.push((String::from_utf8_lossy(name).into_owned(), values));
-                    }
-                    entry = Some(Entry { attrs });
+                    entry = Some(parse_entry(content)?);
                 }
                 0x73 => {} // search result reference: ignored
                 0x65 => {

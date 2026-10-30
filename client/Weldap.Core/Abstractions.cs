@@ -103,7 +103,6 @@ public enum Reason
 {
     None,
     BadFormat,
-    EmptyPassword,
     Excluded,
     NotManaged,
     RateLimited,

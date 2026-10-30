@@ -267,6 +267,12 @@ HRESULT WeldapHpkeSeal(_In_reads_bytes_(cbPublic) const BYTE *pbPublic, ULONG cb
     if (SUCCEEDED(hr)) hr = AesGcmSeal(rgbKey, rgbNonce, pbAad, cbAad, pbPlain, cbPlain, pbCt);
     if (SUCCEEDED(hr)) *pcbCt = cbPlain + WELDAP_HPKE_TAG_BYTES;
 
+    // Wipe every buffer that held secret or key-derived material, on success and on every failure path:
+    // rgbDh/rgbEaePrk/rgbShared are the DH shared secret and its derivations, rgbSecret/rgbKey/rgbNonce are the
+    // key schedule, and rgbKsc is the key-schedule context (wiped defensively). The three buffers deliberately
+    // NOT wiped hold only public data -- rgbKemContext is enc||pkR, and rgbPskIdHash/rgbInfoHash are hashes of
+    // the fixed public labels. INVARIANT: any new intermediate that touches the password or key material must
+    // be added to this list; when in doubt, wipe it.
     SecureZeroMemory(rgbDh, sizeof(rgbDh));
     SecureZeroMemory(rgbEaePrk, sizeof(rgbEaePrk));
     SecureZeroMemory(rgbShared, sizeof(rgbShared));
@@ -312,6 +318,8 @@ static HRESULT SealPassword(_In_ PCWSTR pwzUun, bool fUnlock, _In_ PCWSTR pwzPas
     {
         return WELDAP_E_NOT_CONFIGURED;
     }
+    // Key-id charset check at the registry-read boundary. WeldapClient re-checks it before the wire send (a
+    // separate trust boundary); the two checks are deliberately independent defence in depth, not merged.
     for (size_t i = 0; wzKid[i] != L'\0'; i++)
     {
         wchar_t c = wzKid[i];

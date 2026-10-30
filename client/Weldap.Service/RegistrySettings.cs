@@ -17,11 +17,14 @@ internal static unsafe class RegistrySettings
     /// </summary>
     public const string SecretKeyPath = KeyPath + @"\Secret";
 
+    // TrustedInstaller's SID: no WellKnownSidType covers it, so it is written out once here and reused below.
+    private const string TrustedInstallerSid = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
     private static readonly HashSet<SecurityIdentifier> Trusted =
     [
         new(WellKnownSidType.LocalSystemSid, null),
         new(WellKnownSidType.BuiltinAdministratorsSid, null),
-        new("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"), // TrustedInstaller
+        new(TrustedInstallerSid), // TrustedInstaller
     ];
 
     private const RegistryRights WriteRights = RegistryRights.SetValue | RegistryRights.CreateSubKey
@@ -83,7 +86,7 @@ internal static unsafe class RegistrySettings
             if (rule.PropagationFlags.HasFlag(PropagationFlags.InheritOnly)) continue;
             if ((rule.RegistryRights & ReadRights) == 0) continue;
             if (rule.IdentityReference is SecurityIdentifier sid
-                && (sid == system || sid.Value == "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464")) continue;
+                && (sid == system || sid.Value == TrustedInstallerSid)) continue;
             return $@"HKLM\{SecretKeyPath} is readable by {rule.IdentityReference}; refusing to use it (SR-9)";
         }
         return null;

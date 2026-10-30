@@ -86,6 +86,9 @@ fn reply(result: &'static str) -> Reply {
     Reply { v: 1, result, ..Default::default() }
 }
 
+/// A valid username: lowercase ASCII alphanumeric, length 1..=20. Deliberately a strict subset of
+/// `audit::is_identifier` (which also allows `-`, up to 63), so every UUN accepted here logs verbatim and
+/// never degrades to "?" in the audit trail. If you widen this, widen `is_identifier` to match.
 pub fn valid_uun(s: &str) -> bool {
     !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
 }
@@ -99,7 +102,14 @@ type Window = Mutex<HashMap<String, VecDeque<Instant>>>;
 /// Keys (devices, UUNs) tracked before idle ones are swept out.
 const WINDOW_SWEEP: usize = 4096;
 
-/// Sliding window: true if `key` is over `limit` (recording this attempt first when `record`).
+/// Sliding-window rate check. `record` selects the mode:
+///
+/// - `record == true`: push this attempt, then return whether the count is now strictly over `limit`.
+/// - `record == false` (peek): do not push; return whether the window already sits at `limit` -- i.e. whether
+///   recording one more attempt would exceed it.
+///
+/// The final `n > limit || (!record && n >= limit)` encodes exactly that asymmetry; keep both terms. Callers
+/// peek before serving and record only an actually-invalid attempt, so a valid login never spends the budget.
 fn over(map: &Window, key: &str, limit: usize, window: Duration, record: bool) -> bool {
     let Ok(mut m) = map.lock() else { return true }; // fail closed
     if m.len() >= WINDOW_SWEEP {
@@ -453,6 +463,9 @@ pub fn device_name(conn: &ServerConnection) -> Option<String> {
     cert_device_name(der.as_ref())
 }
 
+/// The device name is the certificate CN, held to the same charset and length as `audit::is_identifier`
+/// (lowercase alphanumeric or `-`, up to 63) so an authenticated device always logs verbatim, never as "?".
+/// Keep this rule and `is_identifier` in lockstep.
 pub fn cert_device_name(der: &[u8]) -> Option<String> {
     let (_, cert) = x509_parser::parse_x509_certificate(der).ok()?;
     let cn = cert.subject().iter_common_name().next()?.as_str().ok()?.to_string();

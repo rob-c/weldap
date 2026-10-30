@@ -44,7 +44,7 @@ fn load_key(kid: &str, path: &Path) -> Result<seal::PasswordKey, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut text = SecretBuf::read_from(&mut file, 256).map_err(|e| format!("{}: {e}", path.display()))?;
     text.trim_newlines();
-    let mut scalar = [0u8; 48];
+    let mut scalar = [0u8; 48]; // a 32-byte P-256 scalar plus margin; from_scalar below rejects a wrong length
     let n = B64.decode_slice(text.as_slice(), &mut scalar).map_err(|_| format!("{}: not base64", path.display()))?;
     drop(text);
     let key = seal::PasswordKey::from_scalar(kid.to_string(), &scalar[..n]);
