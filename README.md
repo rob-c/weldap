@@ -11,6 +11,8 @@
 
 # WELDAP – Windows Enterprise LDAP
 
+[![CI](https://github.com/rob-c/weldap/actions/workflows/ci.yml/badge.svg)](https://github.com/rob-c/weldap/actions/workflows/ci.yml)
+
 Builds implicit trust in an LDAP directory into a Windows device: a pGina-style logon (native credential
 provider + C# service over a named pipe) that checks the user's password and creates or updates a matching
 local account. There are exactly two parties on the network:
@@ -85,7 +87,9 @@ host out, because the agent doesn't go through LogonUI.
 ## Build and test
 
 ```sh
-tests/quality.sh                    # every gate below that runs on the Mac; non-zero on any failure
+make quality                        # every host gate (wraps tests/quality.sh); non-zero on any failure
+tests/quality.sh <gate>...          # run named gates only (CI does this): paranoia budget protocol
+                                    #   shellcheck client server deny imports; --fast for the quick three
 ./build.sh                          # C# unit tests, then publish the service for win-x64 and win-arm64 to out/
 vm/build-in-vm.sh                   # in vm1: credential provider x64 + ARM64 and both MSIs -> out/msi
 docker build -t weldap-server server/ && docker build --target test -t weldap-server:test server/
@@ -129,6 +133,20 @@ against the server's HPKE with `weldap-probe open`.
   never a hang or a crash. TLS integrity turns any injected or corrupted bytes into a dropped connection; the
   client trusts the server by key pin, so a middlebox or a rogue CA cannot impersonate it. Both the server's
   Docker suite and the Core transport tests drive these cases explicitly.
+- **Supply chain and reproducibility:** the Rust crates (`Cargo.lock`) and NuGet packages
+  (`packages.lock.json`, restored in locked mode under CI) are pinned with content hashes, the server's Docker
+  base images are pinned by digest, and GitHub Actions are pinned by commit SHA. `cargo-deny` gates the server's
+  dependency graph on every push — advisories (RustSec), licences (an explicit allow-list), bans and sources —
+  and Dependabot keeps all of these current, each bump re-gated by CI. The one accepted advisory is recorded,
+  with its rationale and revisit condition, in `server/deny.toml`.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the host gates — lint, client (C# 100/100), server (Rust 100/100) and
+cargo-deny — on every push and pull request, each job calling `tests/quality.sh` with the same gate names you
+run locally, so the green badge above means exactly what `make quality` means on your machine. The Windows-only
+build and the end-to-end acceptance run stay in the VMs (they need MSVC and a real LogonUI) and are not part of
+hosted CI.
 
 ## Test directory
 

@@ -1,0 +1,37 @@
+version: 2
+# Keep the pinned inputs current without hand-watching advisories. Updates are grouped so each ecosystem opens
+# one PR a week, not a swarm; CI (and, for the server, cargo-deny) gates every one of them before merge.
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: "/server"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dotnet:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: "/server"
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ["*"]

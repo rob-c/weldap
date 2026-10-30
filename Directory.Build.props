@@ -7,5 +7,10 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <Deterministic>true</Deterministic>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Supply chain: pin the exact restored packages (with content hashes) in a committed packages.lock.json.
+         Locally, restore refreshes the lock when a dependency changes; in CI (CI=true, as GitHub Actions sets)
+         restore is locked, so a build fails rather than silently resolving a package the lock did not record. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
   </PropertyGroup>
 </Project>

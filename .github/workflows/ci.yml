@@ -1,0 +1,61 @@
+name: CI
+
+# The host-runnable quality gates, one job per gate group, each calling tests/quality.sh with the gate name so
+# CI and a local run execute the identical check (no duplicated gate logic to drift). The Windows-only work
+# (credential provider, MSI, end-to-end acceptance) runs in the QEMU VMs described in README.md and is not part
+# of hosted CI; this workflow is the always-on guard for everything that does not need Windows.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: CI only needs to read the checkout.
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint (paranoia, budget, protocol, shellcheck)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Host lint gates
+        run: tests/quality.sh paranoia budget protocol shellcheck
+
+  client:
+    name: "client (C#: build, format, Weldap.Core 100/100)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Client gate
+        run: tests/quality.sh client
+
+  server:
+    name: "server (Rust: clippy, tests, 100/100)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Server gate (Docker)
+        run: tests/quality.sh server
+
+  supply-chain:
+    name: supply-chain (cargo-deny)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: cargo-deny (advisories, licences, bans, sources)
+        run: tests/quality.sh deny

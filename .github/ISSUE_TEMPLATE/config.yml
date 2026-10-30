@@ -1,0 +1,6 @@
+# A security vulnerability must never be filed as a public issue -- route it to the private channel instead.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/rob-c/weldap/security/policy
+    about: Do NOT open a public issue for a vulnerability. See SECURITY.md for private reporting.

@@ -1,0 +1,46 @@
+# cargo-deny policy for the server's dependency graph. Run by `tests/quality.sh deny` and the CI supply-chain
+# job. The allow-list is exactly the licences present today (see `cargo deny list`); a new dependency under any
+# other licence fails the gate on purpose, so the review is forced rather than implicit.
+
+[advisories]
+# Fail on a security advisory or a yanked release. RustSec's advisory DB is fetched fresh on each run, so a
+# newly disclosed vulnerability in a pinned crate turns CI red the next day.
+yanked = "deny"
+# cargo-deny denies every advisory (vulnerability, unmaintained, unsound) by default. Exceptions go here, each
+# a RUSTSEC id with a dated rationale -- an empty list is the goal. Review every entry whenever deps are bumped.
+ignore = [
+    { id = "RUSTSEC-2026-0387", reason = """
+crypto-bigint 0.5.5 (transitive: hpke 0.12 -> p256 0.13 -> elliptic-curve 0.13) has secret-dependent branches in \
+some constant-time ops. Logged 2026-10-30. Not fixed yet because the only fix path is hpke >=0.14, which (a) drops \
+the granular 'p256' feature for a bundled 'nistp' that compiles in P-384 and P-521 we never use -- a surface \
+increase against this project's minimisation goal -- and (b) pulls the aes-gcm 0.11 / rand_core RustCrypto bump, a \
+real change to the HPKE open path whose C++<->Rust interop can only be confirmed by the on-VM acceptance suite. \
+Practical remote exploitability here is low: the server does one bind per request (no high-rate timing oracle) and \
+the sealed path is reached only by mutually-authenticated devices. Tracked as a dedicated, VM-validated migration; \
+revisit when hpke exposes a p256-only feature or the migration PR lands.""" },
+]
+
+[licenses]
+# OR-licensed crates (e.g. "MIT OR Apache-2.0") are satisfied by any one entry below; `subtle` is BSD-3-Clause
+# only, `ring` is "Apache-2.0 AND ISC" (both listed).
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "ISC",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Two copies of a crate is a warning (common and usually harmless), not a build break; a `*` version
+# requirement is forbidden outright.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# Only crates.io; no git or alternative-registry dependencies may sneak in.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
