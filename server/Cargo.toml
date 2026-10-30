@@ -21,15 +21,15 @@ test = false # it includes seal.rs and secret.rs, whose tests run in the server'
 # TLS: ring backend, no `logging` feature, so rustls itself can never log anything.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = { version = "1.10", features = ["std"] }
-x509-parser = "0.16"
+x509-parser = "0.18"
 # HPKE (RFC 9180): DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-256-GCM. The `nistp` feature is how 0.15 exposes
 # P-256; it also compiles in P-384/P-521, which we never instantiate, so thin LTO drops them from the binary.
 hpke = { version = "0.15", default-features = false, features = ["alloc", "nistp", "aes", "getrandom"] }
 # OS randomness for the probe/test sealer's request ids; hpke seals with its own getrandom-backed RNG.
-getrandom = "0.3"
+getrandom = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-base64 = "0.22"
+base64 = "0.23"
 zeroize = "1"
 libc = "0.2"
 
