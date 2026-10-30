@@ -24,7 +24,8 @@ local account. There are exactly two parties on the network:
 - **server** (`server/`): a Rust service in an AlmaLinux 9 container, the only thing clients reach and the only
   LDAP client of the directory. It opens the sealed password in locked memory, binds as the user, and answers.
 
-See `client/Weldap.Shared/PROTOCOL.md`, `server/README.md` and `docs/REQUIREMENTS.md`. It targets 389
+New to the code? Start with `docs/ARCHITECTURE.md`. See also `client/Weldap.Shared/PROTOCOL.md`,
+`server/README.md` and `docs/REQUIREMENTS.md`. It targets 389
 Directory Server (and any LDAP directory that accepts simple binds over LDAPS).
 
 ## Layout
@@ -37,7 +38,7 @@ Directory Server (and any LDAP directory that accepts simple binds over LDAPS).
 | `testdir/` | Local test environment: 389 DS on an internal-only network + the WELDAP server |
 | `tests/` | `quality.sh` (every gate), unit tests, credential-provider harness, server and acceptance suites, surface checks |
 | `vm/` | Headless QEMU test VMs on Apple Silicon: unattended install, provisioning, control script |
-| `docs/` | `REQUIREMENTS.md` (the authoritative requirements), `logo.txt` |
+| `docs/` | `ARCHITECTURE.md` (how the code fits together — start here), `REQUIREMENTS.md` (the authoritative requirements), `logo.txt` |
 
 ## Test VMs
 
