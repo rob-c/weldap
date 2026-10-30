@@ -8,17 +8,9 @@
 yanked = "deny"
 # cargo-deny denies every advisory (vulnerability, unmaintained, unsound) by default. Exceptions go here, each
 # a RUSTSEC id with a dated rationale -- an empty list is the goal. Review every entry whenever deps are bumped.
-ignore = [
-    { id = "RUSTSEC-2026-0387", reason = """
-crypto-bigint 0.5.5 (transitive: hpke 0.12 -> p256 0.13 -> elliptic-curve 0.13) has secret-dependent branches in \
-some constant-time ops. Logged 2026-10-30. Not fixed yet because the only fix path is hpke >=0.14, which (a) drops \
-the granular 'p256' feature for a bundled 'nistp' that compiles in P-384 and P-521 we never use -- a surface \
-increase against this project's minimisation goal -- and (b) pulls the aes-gcm 0.11 / rand_core RustCrypto bump, a \
-real change to the HPKE open path whose C++<->Rust interop can only be confirmed by the on-VM acceptance suite. \
-Practical remote exploitability here is low: the server does one bind per request (no high-rate timing oracle) and \
-the sealed path is reached only by mutually-authenticated devices. Tracked as a dedicated, VM-validated migration; \
-revisit when hpke exposes a p256-only feature or the migration PR lands.""" },
-]
+# (RUSTSEC-2026-0387, the crypto-bigint 0.5 side-channel, was cleared 2026-10-30 by the hpke 0.15 migration:
+# crypto-bigint is now 0.7.10, with fiat-crypto's formally-verified field arithmetic underneath.)
+ignore = []
 
 [licenses]
 # OR-licensed crates (e.g. "MIT OR Apache-2.0") are satisfied by any one entry below; `subtle` is BSD-3-Clause

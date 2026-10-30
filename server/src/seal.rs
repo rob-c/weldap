@@ -53,7 +53,7 @@ impl PasswordKey {
         let tag = AeadTag::<AesGcm256>::from_bytes(tag).expect("tag slice is exactly TAG_LEN after the length guard");
         let mut buf = SecretBuf::concat(&[ct]);
         // On failure `buf` (partly decrypted garbage) is zeroed when dropped.
-        ctx.open_in_place_detached(buf.as_mut_slice(), aad, &tag).map_err(|_| ())?;
+        ctx.open_inout_detached(buf.as_mut_slice().into(), aad, &tag).map_err(|_| ())?;
         Ok(buf)
     }
 }
@@ -62,19 +62,19 @@ impl PasswordKey {
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn seal(public: &[u8], password: &[u8], aad: &[u8]) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
     let pk = <Kem as hpke::Kem>::PublicKey::from_bytes(public).map_err(|_| "invalid public key")?;
-    let mut rng = rand_core::OsRng;
-    // Unreachable: setup/seal with a valid public key (checked above) and AES-256-GCM cannot fail.
-    let (enc, mut ctx) = hpke::setup_sender::<AesGcm256, HkdfSha256, Kem, _>(&OpModeS::Base, &pk, INFO, &mut rng)
+    // Unreachable: setup/seal with a valid public key (checked above) and AES-256-GCM cannot fail. hpke draws the
+    // ephemeral key from its own getrandom-backed RNG.
+    let (enc, mut ctx) = hpke::setup_sender::<AesGcm256, HkdfSha256, Kem>(&OpModeS::Base, &pk, INFO)
         .expect("sender setup with a valid public key cannot fail");
     let mut out = password.to_vec();
-    let tag = ctx.seal_in_place_detached(&mut out, aad).expect("AES-256-GCM seal cannot fail");
+    let tag = ctx.seal_inout_detached((&mut out[..]).into(), aad).expect("AES-256-GCM seal cannot fail");
     out.extend_from_slice(&tag.to_bytes());
     Ok((enc.to_bytes().to_vec(), out))
 }
 
 /// A new password key pair: (private scalar, public point).
 pub fn generate() -> (Vec<u8>, Vec<u8>) {
-    let (sk, pk) = Kem::gen_keypair(&mut rand_core::OsRng);
+    let (sk, pk) = Kem::gen_keypair();
     (sk.to_bytes().to_vec(), pk.to_bytes().to_vec())
 }
 

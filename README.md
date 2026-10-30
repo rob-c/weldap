@@ -137,8 +137,8 @@ against the server's HPKE with `weldap-probe open`.
   (`packages.lock.json`, restored in locked mode under CI) are pinned with content hashes, the server's Docker
   base images are pinned by digest, and GitHub Actions are pinned by commit SHA. `cargo-deny` gates the server's
   dependency graph on every push — advisories (RustSec), licences (an explicit allow-list), bans and sources —
-  and Dependabot keeps all of these current, each bump re-gated by CI. The one accepted advisory is recorded,
-  with its rationale and revisit condition, in `server/deny.toml`.
+  and Dependabot keeps all of these current, each bump re-gated by CI. The accepted-advisory list in
+  `server/deny.toml` is empty; any future exception must carry a dated rationale and a revisit condition there.
 
 ## Continuous integration
 

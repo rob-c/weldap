@@ -154,6 +154,5 @@ fn hex(s: &str) -> Vec<u8> {
 }
 
 fn getrandom(buf: &mut [u8]) {
-    use rand_core::RngCore;
-    rand_core::OsRng.fill_bytes(buf);
+    ::getrandom::fill(buf).expect("OS RNG");
 }
