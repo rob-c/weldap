@@ -338,6 +338,45 @@ HANDLE ConnectPipe(PCWSTR pwzPipeName, ULONGLONG ullDeadline)
         }
     }
 }
+
+// Map a non-OK transfer result to a client status. Written once so the IO failure sites in Exchange cannot
+// drift apart (a timeout stays a timeout; anything else is a generic protocol error).
+WELDAP_CLIENT_STATUS IoToStatus(IO_RESULT io)
+{
+    return (io == IO_TIMEOUT) ? WELDAP_STATUS_TIMEOUT : WELDAP_STATUS_PROTOCOL_ERROR;
+}
+
+// The request/reply exchange over an already-connected, SYSTEM-verified pipe. rgbFrame carries the framed
+// request in (4-byte length prefix + body) and is reused for the reply body; it is wiped once the request is
+// on the wire. Taken as an array reference so /analyze keeps the exact buffer bound. Flat early-return control
+// flow, in place of the former four-deep nest in WeldapAuthenticateEx.
+WELDAP_CLIENT_STATUS Exchange(HANDLE hPipe, HANDLE hEvent, BYTE (&rgbFrame)[4 + WELDAP_MAX_MESSAGE_BYTES],
+                              size_t cbBody, ULONGLONG ullDeadline, WELDAP_REPLY *pReply)
+{
+    IO_RESULT io = TransferAll(hPipe, hEvent, true, rgbFrame, static_cast<DWORD>(4 + cbBody), ullDeadline);
+    SecureZeroMemory(rgbFrame, sizeof(rgbFrame));
+    if (io != IO_OK)
+    {
+        return IoToStatus(io);
+    }
+    BYTE rgbLen[4];
+    io = TransferAll(hPipe, hEvent, false, rgbLen, sizeof(rgbLen), ullDeadline);
+    if (io != IO_OK)
+    {
+        return IoToStatus(io);
+    }
+    DWORD cbReply = rgbLen[0] | (rgbLen[1] << 8) | (rgbLen[2] << 16) | (static_cast<DWORD>(rgbLen[3]) << 24);
+    if (cbReply < 1 || cbReply > WELDAP_MAX_MESSAGE_BYTES)
+    {
+        return WELDAP_STATUS_PROTOCOL_ERROR;
+    }
+    io = TransferAll(hPipe, hEvent, false, rgbFrame, cbReply, ullDeadline);
+    if (io != IO_OK)
+    {
+        return IoToStatus(io);
+    }
+    return WeldapParseReply(rgbFrame, cbReply, pReply) ? WELDAP_STATUS_REPLIED : WELDAP_STATUS_PROTOCOL_ERROR;
+}
 } // namespace
 
 WELDAP_CLIENT_STATUS WeldapAuthenticateEx(_In_ PCWSTR pwzPipeName, DWORD dwDeadlineMs, bool fUnlock,
@@ -375,43 +414,7 @@ WELDAP_CLIENT_STATUS WeldapAuthenticateEx(_In_ PCWSTR pwzPipeName, DWORD dwDeadl
     }
     else
     {
-        IO_RESULT io = TransferAll(hPipe, hEvent, true, rgbFrame, static_cast<DWORD>(4 + cbBody), ullDeadline);
-        SecureZeroMemory(rgbFrame, sizeof(rgbFrame));
-        if (io == IO_OK)
-        {
-            BYTE rgbLen[4];
-            io = TransferAll(hPipe, hEvent, false, rgbLen, sizeof(rgbLen), ullDeadline);
-            if (io == IO_OK)
-            {
-                DWORD cbReply = rgbLen[0] | (rgbLen[1] << 8) | (rgbLen[2] << 16) | (static_cast<DWORD>(rgbLen[3]) << 24);
-                if (cbReply < 1 || cbReply > WELDAP_MAX_MESSAGE_BYTES)
-                {
-                    status = WELDAP_STATUS_PROTOCOL_ERROR;
-                }
-                else
-                {
-                    // Reuse the frame buffer for the reply body.
-                    io = TransferAll(hPipe, hEvent, false, rgbFrame, cbReply, ullDeadline);
-                    if (io == IO_OK)
-                    {
-                        status = WeldapParseReply(rgbFrame, cbReply, pReply) ? WELDAP_STATUS_REPLIED
-                                                                          : WELDAP_STATUS_PROTOCOL_ERROR;
-                    }
-                    else
-                    {
-                        status = (io == IO_TIMEOUT) ? WELDAP_STATUS_TIMEOUT : WELDAP_STATUS_PROTOCOL_ERROR;
-                    }
-                }
-            }
-            else
-            {
-                status = (io == IO_TIMEOUT) ? WELDAP_STATUS_TIMEOUT : WELDAP_STATUS_PROTOCOL_ERROR;
-            }
-        }
-        else
-        {
-            status = (io == IO_TIMEOUT) ? WELDAP_STATUS_TIMEOUT : WELDAP_STATUS_PROTOCOL_ERROR;
-        }
+        status = Exchange(hPipe, hEvent, rgbFrame, cbBody, ullDeadline, pReply);
     }
 
     SecureZeroMemory(rgbFrame, sizeof(rgbFrame));

@@ -222,6 +222,9 @@ HRESULT KerbInteractiveUnlockLogonInit(
                     hr = S_OK;
                     break;
 
+                // WELDAP: CredUI is unreachable here -- SetUsageScenario accepts only CPUS_LOGON and
+                // CPUS_UNLOCK_WORKSTATION -- but the sample's full handling is retained so this code still
+                // matches the documented credential-provider contract.
                 case CPUS_CREDUI:
                     pkil->MessageType = (KERB_LOGON_SUBMIT_TYPE)0; // MessageType does not apply to CredUI
                     hr = S_OK;
@@ -480,6 +483,10 @@ HRESULT ProtectIfNecessaryAndCopyPassword(
         hr = SHStrDupW(pwzPassword, &pwzPasswordCopy);
         if (SUCCEEDED(hr))
         {
+            // WELDAP: in this provider both conditions below are unreachable -- CredUI is rejected by
+            // SetUsageScenario, and no pre-encrypted password can arrive because SetSerialization returns
+            // E_NOTIMPL. The CredIsProtected check is kept deliberately: it is cheap defence in depth against
+            // ever double-encrypting a password, and removing it would also leave `cpus` unused.
             bool bCredAlreadyEncrypted = false;
             CRED_PROTECTION_TYPE protectionType;
 
