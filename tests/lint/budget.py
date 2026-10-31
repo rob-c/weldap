@@ -11,7 +11,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 # component: (globs, budget in lines). Budgets sit just above today's size; lower them as code is removed.
 BUDGETS = {
     "credential provider (C++, in LogonUI)": (["client/Weldap.CredentialProvider/*.cpp", "client/Weldap.CredentialProvider/*.h",
-                                              "client/Weldap.Shared/*.h"], 2180),
+                                              "client/Weldap.Shared/*.h"], 2140),  # -40: dropped unreachable CredUI/TS serialization branches
     "client service (C#)": (["client/Weldap.Service/*.cs"], 920),
     "client core (C#)": (["client/Weldap.Core/*.cs"], 830),  # +70: ServerTransport + AuditFormat moved in from the Service for host-side test coverage
     "server (Rust)": (["server/src/*.rs"], 1160),

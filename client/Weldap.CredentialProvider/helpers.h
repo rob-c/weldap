@@ -78,10 +78,9 @@ HRESULT RetrieveNegotiateAuthPackage(
     _Out_ ULONG *pulAuthPackage
     );
 
-//encrypt a password (if necessary) and copy it; if not, just copy it
+//encrypt the local password with CredProtect and copy it (an empty password is copied as-is)
 HRESULT ProtectIfNecessaryAndCopyPassword(
     _In_ PCWSTR pwzPassword,
-    _In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
     _Outptr_result_nullonfailure_ PWSTR *ppwzProtectedPassword
     );
 

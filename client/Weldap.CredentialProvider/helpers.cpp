@@ -170,9 +170,9 @@ static void _UnicodeStringPackedUnicodeStringCopy(
 // passed-in strings.  This is useful if you will later use KerbInteractiveUnlockLogonPack
 // to serialize the structure.
 //
-// The password is stored in encrypted form for CPUS_LOGON and CPUS_UNLOCK_WORKSTATION
-// because the system can accept encrypted credentials.  It is not encrypted in CPUS_CREDUI
-// because we cannot know whether our caller can accept encrypted credentials.
+// The password arrives already in CredProtect-encrypted form (see ProtectIfNecessaryAndCopyPassword);
+// the system accepts encrypted credentials for CPUS_LOGON and CPUS_UNLOCK_WORKSTATION, the only two
+// scenarios this provider serves.
 //
 HRESULT KerbInteractiveUnlockLogonInit(
     _In_ PWSTR pwzDomain,
@@ -222,14 +222,8 @@ HRESULT KerbInteractiveUnlockLogonInit(
                     hr = S_OK;
                     break;
 
-                // WELDAP: CredUI is unreachable here -- SetUsageScenario accepts only CPUS_LOGON and
-                // CPUS_UNLOCK_WORKSTATION -- but the sample's full handling is retained so this code still
-                // matches the documented credential-provider contract.
-                case CPUS_CREDUI:
-                    pkil->MessageType = (KERB_LOGON_SUBMIT_TYPE)0; // MessageType does not apply to CredUI
-                    hr = S_OK;
-                    break;
-
+                // WELDAP: only logon and unlock reach this provider -- SetUsageScenario rejects every other
+                // scenario (CredUI included) -- so anything else here is a programming error.
                 default:
                     hr = E_FAIL;
                     break;
@@ -459,68 +453,26 @@ static HRESULT _ProtectAndCopyString(
 }
 
 //
-// If pwzPassword should be encrypted, return a copy encrypted with CredProtect.
-//
-// If not, just return a copy.
+// Return the local password encrypted with CredProtect, or -- for an empty password, which
+// needs no encryption -- a copy of the empty string.
 //
 HRESULT ProtectIfNecessaryAndCopyPassword(
     _In_ PCWSTR pwzPassword,
-    _In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
     _Outptr_result_nullonfailure_ PWSTR *ppwzProtectedPassword
     )
 {
     *ppwzProtectedPassword = nullptr;
 
-    HRESULT hr;
-
-    // ProtectAndCopyString is intended for non-empty strings only.  Empty passwords
-    // do not need to be encrypted.
+    // _ProtectAndCopyString is for non-empty strings only; an empty password needs no encryption.
+    // WELDAP: the sample's CredUI and already-encrypted (Terminal Services SetSerialization) handling is
+    // gone -- neither can reach this provider, since SetUsageScenario accepts only logon/unlock and
+    // SetSerialization returns E_NOTIMPL -- so the local password is always freshly CredProtect-encrypted.
     if (pwzPassword && *pwzPassword)
     {
-        // pwzPassword is const, but CredIsProtected takes a non-const string.
-        // So, make a copy that we know isn't const.
-        PWSTR pwzPasswordCopy;
-        hr = SHStrDupW(pwzPassword, &pwzPasswordCopy);
-        if (SUCCEEDED(hr))
-        {
-            // WELDAP: in this provider both conditions below are unreachable -- CredUI is rejected by
-            // SetUsageScenario, and no pre-encrypted password can arrive because SetSerialization returns
-            // E_NOTIMPL. The CredIsProtected check is kept deliberately: it is cheap defence in depth against
-            // ever double-encrypting a password, and removing it would also leave `cpus` unused.
-            bool bCredAlreadyEncrypted = false;
-            CRED_PROTECTION_TYPE protectionType;
-
-            // If the password is already encrypted, we should not encrypt it again.
-            // An encrypted password may be received through SetSerialization in the
-            // CPUS_LOGON scenario during a Terminal Services connection, for instance.
-            if (CredIsProtectedW(pwzPasswordCopy, &protectionType))
-            {
-                if (CredUnprotected != protectionType)
-                {
-                    bCredAlreadyEncrypted = true;
-                }
-            }
-
-            // Passwords should not be encrypted in the CPUS_CREDUI scenario.  We
-            // cannot know if our caller expects or can handle an encryped password.
-            if (CPUS_CREDUI == cpus || bCredAlreadyEncrypted)
-            {
-                hr = SHStrDupW(pwzPasswordCopy, ppwzProtectedPassword);
-            }
-            else
-            {
-                hr = _ProtectAndCopyString(pwzPasswordCopy, ppwzProtectedPassword);
-            }
-
-            CoTaskMemFreeSecureString(pwzPasswordCopy);
-        }
-    }
-    else
-    {
-        hr = SHStrDupW(L"", ppwzProtectedPassword);
+        return _ProtectAndCopyString(pwzPassword, ppwzProtectedPassword);
     }
 
-    return hr;
+    return SHStrDupW(L"", ppwzProtectedPassword);
 }
 
 //

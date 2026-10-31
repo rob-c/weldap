@@ -376,7 +376,7 @@ HRESULT CWeldapCredential::_BuildSerialization(_In_ PCWSTR pwzUun, _In_ PCWSTR p
     }
 
     PWSTR pwzProtectedPassword = nullptr;
-    hr = ProtectIfNecessaryAndCopyPassword(pwzLocalPassword, _cpus, &pwzProtectedPassword);
+    hr = ProtectIfNecessaryAndCopyPassword(pwzLocalPassword, &pwzProtectedPassword);
     if (SUCCEEDED(hr))
     {
         // We use KERB_INTERACTIVE_UNLOCK_LOGON in both unlock and logon scenarios. It contains a
