@@ -5,7 +5,12 @@ and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Supply chain & tooling
+- **Release pipeline** (`.github/workflows/release.yml`): on a version tag, builds and publishes the server
+  container to GHCR, mints a signed build-provenance attestation for the image, generates SBOMs (SPDX and
+  CycloneDX) for the server image and the client, and attaches them to the GitHub release. Uses only
+  first-party actions plus pinned CLIs/containers, adding no new marketplace-action surface.
+- `docs/RELEASING.md`: the release procedure, provenance/SBOM verification, and the manual Windows MSI step.
 
 ## [0.1.0] - 2026-10-31
 

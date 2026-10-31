@@ -1,0 +1,141 @@
+name: Release
+
+# Cut a release when a version tag (v*) is pushed, or on demand against an existing tag. The job builds the
+# server container from the exact tagged source, publishes it to GHCR, generates SBOMs for the server image
+# and the client, records a signed build-provenance attestation for the image, and attaches the SBOMs and an
+# image reference to the GitHub release (creating it from the CHANGELOG section if it does not exist yet).
+#
+# The Windows MSI is NOT built here: it needs a Windows runner and the VM-built credential provider, so it
+# stays a documented manual step. See docs/RELEASING.md for the full procedure and for how to verify the
+# provenance attestation.
+#
+# Supply-chain posture matches the rest of the project: only two first-party actions (checkout and the
+# GitHub-official attestor) are used; GHCR login/push, SBOM generation (digest-pinned syft container) and
+# release upload all run through pinned CLIs, so the release path adds no new marketplace-action surface.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to (re)build and release, e.g. v0.1.0'
+        required: true
+
+# Least privilege, but a release needs more than CI: write the release and its assets, push the image to
+# GHCR, and mint an OIDC-backed provenance attestation (id-token + attestations).
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+# One release per tag; never cancel a release build in flight.
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/rob-c/weldap-server
+  # syft, pinned by version AND digest (as every other third-party image in this repo is).
+  SYFT: anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a
+
+jobs:
+  release:
+    name: "release (server image, SBOMs, provenance)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      # On a tag push, github.ref is the tag; on manual dispatch, check out the tag the operator named, so
+      # the released artifact is always built from the tagged tree and never from a branch head.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Derive and verify version
+        id: v
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' server/Cargo.toml | head -1)
+          if [ "$version" != "$crate" ]; then
+            echo "::error::tag $tag (version $version) does not match server/Cargo.toml ($crate)"
+            exit 1
+          fi
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push the server image
+        id: build
+        run: |
+          set -euo pipefail
+          docker buildx build --target runtime --load \
+            -t "$IMAGE:${{ steps.v.outputs.version }}" \
+            -t "$IMAGE:latest" \
+            server/
+          docker push "$IMAGE:${{ steps.v.outputs.version }}"
+          docker push "$IMAGE:latest"
+          digest=$(docker inspect --format '{{ index .RepoDigests 0 }}' "$IMAGE:${{ steps.v.outputs.version }}" | cut -d@ -f2)
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "built $IMAGE@$digest"
+
+      - name: Generate SBOMs
+        run: |
+          set -euo pipefail
+          mkdir -p sbom
+          docker save "$IMAGE:${{ steps.v.outputs.version }}" -o image.tar
+          # Server: the actual runtime image (OS packages + the server binary).
+          docker run --rm -v "$PWD/image.tar:/image.tar:ro" "$SYFT" -q docker-archive:/image.tar -o spdx-json      > sbom/weldap-server.spdx.json
+          docker run --rm -v "$PWD/image.tar:/image.tar:ro" "$SYFT" -q docker-archive:/image.tar -o cyclonedx-json > sbom/weldap-server.cdx.json
+          # Client: the C# sources and their locked NuGet dependencies.
+          docker run --rm -v "$PWD/client:/client:ro" "$SYFT" -q dir:/client -o spdx-json      > sbom/weldap-client.spdx.json
+          docker run --rm -v "$PWD/client:/client:ro" "$SYFT" -q dir:/client -o cyclonedx-json > sbom/weldap-client.cdx.json
+          rm -f image.tar
+
+      - name: Attest build provenance for the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Compose release notes and image reference
+        run: |
+          set -euo pipefail
+          version="${{ steps.v.outputs.version }}"
+          # Pull just this version's section out of the changelog for the release body.
+          awk -v ver="$version" '
+            index($0, "## [" ver "]") == 1 { grab=1; print "## WELDAP " ver; next }
+            grab && index($0, "## [") == 1 { exit }
+            grab && index($0, "]:") > 1 && index($0, "[") == 1 { exit }
+            grab { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "WELDAP $version." > notes.md; fi
+          {
+            echo "Server container image (linux/amd64):"
+            echo
+            echo "    $IMAGE:$version"
+            echo "    $IMAGE@${{ steps.build.outputs.digest }}"
+            echo
+            echo "Pull by digest to pin exactly. A signed build-provenance attestation is stored alongside"
+            echo "the image in GHCR and can be verified with:"
+            echo
+            echo "    gh attestation verify oci://$IMAGE@${{ steps.build.outputs.digest }} --owner rob-c"
+          } > sbom/IMAGE.txt
+
+      - name: Publish release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.v.outputs.tag }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --verify-tag \
+              --title "WELDAP ${{ steps.v.outputs.version }}" \
+              --notes-file notes.md
+          fi
+          gh release upload "$tag" sbom/* --clobber
