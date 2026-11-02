@@ -14,14 +14,24 @@ G='C:\src\windev'
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 zip -qr "$work/src.zip" client installer tests/cp-harness vm/provision/build-msi.ps1 global.json Directory.Build.props \
-    out/service-win-x64 out/service-win-arm64 \
+    out/service-win-x64 out/service-win-arm64 out/admin-win-x64 out/admin-win-arm64 \
     -x '*/bin/*' '*/obj/*' 'client/Weldap.CredentialProvider/out/*' '*.DS_Store'
 
 vm/vmctl.sh ps "$VM" "Remove-Item -Recurse -Force '$G' -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path '$G' | Out-Null" >/dev/null
 vm/vmctl.sh push "$VM" "$work/src.zip" "$G\\src.zip"
 vm/vmctl.sh ps "$VM" "Expand-Archive -Force '$G\\src.zip' '$G'; Remove-Item '$G\\src.zip'" >/dev/null
-GUEST_TIMEOUT=2400 vm/vmctl.sh ps "$VM" "& '$G\\vm\\provision\\build-msi.ps1' -Root '$G'"
+
+# Pass any WELDAP_SIGN_* set on the host into the guest session so build-msi.ps1 signs the binaries and the MSI
+# (and pins over the signed bytes). Unset = unsigned dev build, exactly as build-msi.ps1 documents.
+sign_prelude=""
+for v in WELDAP_SIGN_THUMBPRINT WELDAP_SIGN_PFX WELDAP_SIGN_PFX_PASSWORD WELDAP_SIGN_TIMESTAMP_URL; do
+    if [[ -n "${!v:-}" ]]; then
+        val="${!v//\'/\'\'}" # single-quote the value for PowerShell, doubling any embedded quote
+        sign_prelude+="\$env:$v='$val'; "
+    fi
+done
+GUEST_TIMEOUT=2400 vm/vmctl.sh ps "$VM" "$sign_prelude& '$G\\vm\\provision\\build-msi.ps1' -Root '$G'"
 
 mkdir -p out/msi out/provider-x64 out/provider-ARM64
 for f in Weldap-x64.msi Weldap-arm64.msi; do

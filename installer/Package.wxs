@@ -38,6 +38,7 @@
     <Feature Id="Main" Title="WELDAP">
       <ComponentRef Id="Service" />
       <ComponentRef Id="Provider" />
+      <ComponentRef Id="AdminCli" />
       <ComponentRef Id="Config" />
     </Feature>
 
@@ -70,6 +71,11 @@
       </RegistryKey>
     </Component>
 
+    <!-- The elevated local account manager (weldapadm). Ships beside the service so the integrity pin applies. -->
+    <Component Id="AdminCli" Directory="INSTALLFOLDER">
+      <File Id="AdminExe" Source="$(var.AdminDir)\weldapadm.exe" KeyPath="yes" />
+    </Component>
+
     <Component Id="Config" Directory="INSTALLFOLDER">
       <RegistryKey Root="HKLM" Key="SOFTWARE\WELDAP" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
         <!-- SR-10: owner Administrators; full control SYSTEM + Administrators; read for Users. -->
@@ -83,8 +89,11 @@
         <RegistryValue Name="MaxOfflineDays" Type="integer" Value="[MAXOFFLINEDAYS]" />
         <RegistryValue Name="OfflineMaxFailures" Type="integer" Value="[OFFLINEMAXFAILURES]" />
         <RegistryValue Name="TileLabel" Type="string" Value="[TILELABEL]" />
-        <!-- Anti-tamper: SHA-256 of the provider DLL shipped in this MSI; the service checks the registered DLL against it. -->
+        <!-- Anti-tamper: SHA-256 of the (signed) binaries shipped in this MSI; the service checks each on disk
+             against its pin and refuses to start on any mismatch. -->
         <RegistryValue Name="ProviderHash" Type="string" Value="$(var.ProviderHash)" />
+        <RegistryValue Name="ServiceHash" Type="string" Value="$(var.ServiceHash)" />
+        <RegistryValue Name="AdminHash" Type="string" Value="$(var.AdminHash)" />
         <!-- Per-account secrets go in HKLM\SOFTWARE\WELDAP\Secret (SYSTEM only), created by the service. -->
       </RegistryKey>
     </Component>

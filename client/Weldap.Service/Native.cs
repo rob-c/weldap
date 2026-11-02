@@ -48,6 +48,13 @@ internal static unsafe partial class Native
     public const uint UF_DONT_EXPIRE_PASSWD = 0x10000;
     public const uint TIMEQ_FOREVER = 0xFFFFFFFF;
     public const int SidTypeUser = 1;
+    public const uint FILTER_NORMAL_ACCOUNT = 0x0002;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct USER_INFO_0
+    {
+        public char* usri0_name;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct USER_INFO_1
@@ -123,6 +130,10 @@ internal static unsafe partial class Native
 
     [LibraryImport("netapi32.dll")]
     public static partial uint NetUserGetInfo(char* servername, char* username, uint level, out IntPtr bufptr);
+
+    [LibraryImport("netapi32.dll")]
+    public static partial uint NetUserEnum(char* servername, uint level, uint filter, out IntPtr bufptr,
+        uint prefmaxlen, out uint entriesread, out uint totalentries, IntPtr* resumehandle);
 
     [LibraryImport("netapi32.dll")]
     public static partial uint NetUserSetInfo(char* servername, char* username, uint level, void* buf, out uint parmErr);

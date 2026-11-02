@@ -10,7 +10,9 @@
     <!-- Credential provider CLSID: must match client/Weldap.CredentialProvider/guid.h and register.ps1. -->
     <ProviderClsid Condition="'$(ProviderClsid)' == ''">{E239AAAB-FFFD-4525-A894-1B9D6314B1CB}</ProviderClsid>
     <ProviderHash Condition="'$(ProviderHash)' == ''">0000000000000000000000000000000000000000000000000000000000000000</ProviderHash>
-    <DefineConstants>ServiceDir=$(ServiceDir);ProviderDir=$(ProviderDir);ProductVersion=$(ProductVersion);ProviderClsid=$(ProviderClsid);ProviderHash=$(ProviderHash)</DefineConstants>
+    <ServiceHash Condition="'$(ServiceHash)' == ''">0000000000000000000000000000000000000000000000000000000000000000</ServiceHash>
+    <AdminHash Condition="'$(AdminHash)' == ''">0000000000000000000000000000000000000000000000000000000000000000</AdminHash>
+    <DefineConstants>ServiceDir=$(ServiceDir);ProviderDir=$(ProviderDir);AdminDir=$(AdminDir);ProductVersion=$(ProductVersion);ProviderClsid=$(ProviderClsid);ProviderHash=$(ProviderHash);ServiceHash=$(ServiceHash);AdminHash=$(AdminHash)</DefineConstants>
     <SuppressValidation>false</SuppressValidation>
   </PropertyGroup>
   <ItemGroup>

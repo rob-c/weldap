@@ -60,7 +60,14 @@ public interface ISecretStore
     void SetOfflineFailures(string uun, int count);
 }
 
-public sealed record LocalAccount(string Name, bool IsManaged, bool Enabled, bool IsAdmin, DateTimeOffset? Expires);
+/// <summary>
+/// A local account as this device sees it. <see cref="IsForceLocal"/> marks a protected backup account
+/// (<c>WELDAP-ForceLocal</c>) that WELDAP never adopts, disables or idle-reaps; <see cref="LastLogon"/> is the
+/// last interactive logon (null when never, or unknown), used for the idle-account cleanup.
+/// </summary>
+public sealed record LocalAccount(
+    string Name, bool IsManaged, bool Enabled, bool IsAdmin, DateTimeOffset? Expires,
+    bool IsForceLocal = false, DateTimeOffset? LastLogon = null);
 
 public sealed class LocalAccountException(string message, int errorCode = 0) : Exception(message)
 {
@@ -71,15 +78,20 @@ public sealed class LocalAccountException(string message, int errorCode = 0) : E
 public interface ILocalAccounts
 {
     LocalAccount? Find(string name);
-    IReadOnlyList<LocalAccount> ListManaged();
+    /// <summary>Every local account on this device (the reconciler classifies them; managed ones are a subset).</summary>
+    IReadOnlyList<LocalAccount> ListAll();
     /// <summary>Creates the account (password never expires, user cannot change it) in the managed group and Users.</summary>
     void Create(string name, ReadOnlySpan<char> password);
+    /// <summary>Brings a pre-existing account under management: adds it to the managed group and Users, in place.</summary>
+    void Adopt(string name);
     void SetPassword(string name, ReadOnlySpan<char> password);
     void SetEnabled(string name, bool enabled);
     /// <summary>Account expiry; null = never.</summary>
     void SetExpiry(string name, DateTimeOffset? expires);
     void SetAdmin(string name, bool admin);
     void EnsureUser(string name);
+    /// <summary>Adds or removes the account from the protected backup group (<c>WELDAP-ForceLocal</c>).</summary>
+    void SetForceLocal(string name, bool forceLocal);
 }
 
 public enum AuditKind
@@ -94,8 +106,15 @@ public enum AuditKind
     AccountDisabled = 1203,
     AdminAdded = 1204,
     AdminRemoved = 1205,
+    AccountAdopted = 1206,
+    ForceLocalSet = 1207,
+    ForceLocalCleared = 1208,
     CleanupRun = 1210,
     CleanupSkipped = 1211,
+    /// <summary>Lockdown dry run: this account would be disabled once enforcement is armed.</summary>
+    WouldDisable = 1212,
+    /// <summary>A disable was declined to honour a safety invariant (e.g. the last enabled local admin).</summary>
+    DisableSkipped = 1213,
     ServerUnreachable = 1400,
 }
 
@@ -117,6 +136,11 @@ public enum Reason
     AccountDisabledLocally,
     RemovedFromUsers,
     AdminSync,
+    ForceLocal,
+    Adopted,
+    Idle,
+    Lockdown,
+    LastAdmin,
 }
 
 /// <summary>One audit record. Never carries a password.</summary>

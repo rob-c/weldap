@@ -18,6 +18,7 @@ MIN_LINE=100
 MIN_BRANCH=100
 CORE=client/Weldap.Core/Weldap.Core.csproj
 SERVICE=client/Weldap.Service/Weldap.Service.csproj
+ADMIN=client/Weldap.Admin/Weldap.Admin.csproj
 TESTS=tests/Weldap.Core.Tests/Weldap.Core.Tests.csproj
 
 step() { printf '\n== %s\n' "$*"; }
@@ -26,12 +27,12 @@ results=$(mktemp -d "${TMPDIR:-/tmp}/weldap-check.XXXXXX")
 trap 'rm -rf "$results"' EXIT
 
 step "build (warnings are errors)"
-for project in "$CORE" "$SERVICE" "$TESTS"; do
+for project in "$CORE" "$SERVICE" "$ADMIN" "$TESTS"; do
     dotnet build "$project" -c Release --no-incremental -warnaserror --nologo -v q
 done
 
 step "format"
-for project in "$CORE" "$SERVICE" "$TESTS"; do
+for project in "$CORE" "$SERVICE" "$ADMIN" "$TESTS"; do
     dotnet format "$project" --verify-no-changes --no-restore
 done
 
@@ -65,7 +66,7 @@ PY
 step "Weldap.Service: Windows-only, covered by the acceptance suite (tests/acceptance/run.sh) only"
 # Everything host-runnable is in Weldap.Core (100/100 above). These files touch Windows APIs that cannot run on
 # the macOS/Linux host, so they have no unit tests here; the on-VM acceptance suite exercises them end to end.
-for f in client/Weldap.Service/*.cs; do
+for f in client/Weldap.Service/*.cs client/Weldap.Admin/*.cs; do
     printf '      %s\n' "$f"
 done
 

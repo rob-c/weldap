@@ -20,11 +20,18 @@ public static class Protocol
     public const int TagBytes = 16;
     public const int MaxPasswordUtf8 = 256;
     public const int MaxKidChars = 32;
+
+    // Request flags byte (position 1). bit0 is the scenario; bit1 is the user's adoption consent. Neither enters
+    // the sealed AAD: the server never sees them, they steer the client/service pipe exchange only.
+    public const byte FlagScenarioUnlock = 0x01;
+    public const byte FlagConsent = 0x02;
+    public const byte FlagsMask = FlagScenarioUnlock | FlagConsent;
 }
 
 public enum Scenario { Logon, Unlock }
 
-public enum ReplyResult : byte { Ok = 0, Deny = 1, Error = 2 }
+/// <summary>Adopt: the account can be taken over, pending the user's consent (the reply carries the warning).</summary>
+public enum ReplyResult : byte { Ok = 0, Deny = 1, Error = 2, Adopt = 3 }
 
 public enum SignInMode { Online, Offline }
 
@@ -50,6 +57,8 @@ public sealed class LoginReply : IDisposable
     public static LoginReply Ok(SignInMode mode, char[] localPassword) => new(ReplyResult.Ok, mode, "", localPassword);
     public static LoginReply Deny(string message) => new(ReplyResult.Deny, SignInMode.Online, message, null);
     public static LoginReply Error(string message) => new(ReplyResult.Error, SignInMode.Online, message, null);
+    /// <summary>The account can be adopted; the message is the warning the user must accept (Continue) or decline.</summary>
+    public static LoginReply Adopt(string message) => new(ReplyResult.Adopt, SignInMode.Online, message, null);
 
     public void Dispose()
     {
@@ -62,15 +71,18 @@ public sealed class LoginRequest : IDisposable
 {
     private readonly byte[] _verifier;
 
-    internal LoginRequest(Scenario scenario, string uun, SealedPassword sealedPassword, byte[] verifier)
+    internal LoginRequest(Scenario scenario, bool consent, string uun, SealedPassword sealedPassword, byte[] verifier)
     {
         Scenario = scenario;
+        Consent = consent;
         Uun = uun;
         Sealed = sealedPassword;
         _verifier = verifier;
     }
 
     public Scenario Scenario { get; }
+    /// <summary>The user accepted the adoption warning (a resubmit after an <see cref="ReplyResult.Adopt"/> reply).</summary>
+    public bool Consent { get; }
     public string Uun { get; }
     public SealedPassword Sealed { get; }
     public ReadOnlySpan<byte> Verifier => _verifier;
@@ -96,8 +108,9 @@ public static class ProtocolCodec
     public static LoginRequest? TryParseRequest(ReadOnlySpan<byte> m)
     {
         if (m.Length is 0 or > Protocol.MaxMessageBytes || m[0] != Protocol.Version || m.Length < 3) return null;
-        if (m[1] > 1) return null;
-        var scenario = m[1] == 1 ? Scenario.Unlock : Scenario.Logon;
+        if ((m[1] & ~Protocol.FlagsMask) != 0) return null;
+        var scenario = (m[1] & Protocol.FlagScenarioUnlock) != 0 ? Scenario.Unlock : Scenario.Logon;
+        var consent = (m[1] & Protocol.FlagConsent) != 0;
         var at = 2;
 
         bool Take(ReadOnlySpan<byte> src, int n, out ReadOnlySpan<byte> field)
@@ -123,7 +136,7 @@ public static class ProtocolCodec
 
         var verifier = GC.AllocateArray<byte>(Protocol.VerifierBytes, pinned: true);
         v.CopyTo(verifier);
-        return new LoginRequest(scenario, Encoding.ASCII.GetString(uun),
+        return new LoginRequest(scenario, consent, Encoding.ASCII.GetString(uun),
             new SealedPassword(Encoding.ASCII.GetString(kid), enc.ToArray(), ct.ToArray(), ts, rid.ToArray()), verifier);
     }
 

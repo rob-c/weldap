@@ -24,6 +24,7 @@ public class RequestParseTests
     private static void AssertSame(SpecParser.Parsed expected, LoginRequest actual)
     {
         Assert.Equal(expected.Scenario, actual.Scenario);
+        Assert.Equal(expected.Consent, actual.Consent);
         Assert.Equal(expected.Uun, actual.Uun);
         Assert.Equal(expected.Kid, actual.Sealed.Kid);
         Assert.Equal(expected.Enc, actual.Sealed.Enc);
@@ -63,12 +64,15 @@ public class RequestParseTests
     }
 
     [Theory]
-    [InlineData(0, Scenario.Logon)]
-    [InlineData(1, Scenario.Unlock)]
-    public void Scenario_byte(byte value, Scenario expected)
+    [InlineData(0, Scenario.Logon, false)]
+    [InlineData(1, Scenario.Unlock, false)]
+    [InlineData(2, Scenario.Logon, true)]  // consent bit, logon
+    [InlineData(3, Scenario.Unlock, true)] // consent bit, unlock
+    public void Flags_byte(byte value, Scenario expected, bool consent)
     {
         using var r = Parse((Valid with { Scenario = value }).Build())!;
         Assert.Equal(expected, r.Scenario);
+        Assert.Equal(consent, r.Consent);
     }
 
     public static TheoryData<int> TruncationLengths() => [.. Enumerable.Range(0, ValidBytes.Length)];
@@ -121,7 +125,7 @@ public class RequestParseTests
             var expected = field switch
             {
                 Field.Version => value == Protocol.Version,
-                Field.Scenario => value <= 1,
+                Field.Scenario => value <= Protocol.FlagsMask,
                 Field.UunLen or Field.KidLen or Field.CtLen => value == ValidBytes[pos],
                 Field.Uun => value is >= 0x21 and <= 0x7E,
                 Field.Kid => value is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-',
@@ -343,12 +347,13 @@ public class RequestParseTests
         Assert.Null(Parse((Valid with { Version = version }).Build()));
 
     [Theory]
-    [InlineData(2)]
-    [InlineData(3)]
+    [InlineData(4)]    // first bit outside scenario|consent
+    [InlineData(5)]
+    [InlineData(6)]
     [InlineData(0x80)]
     [InlineData(0xFF)]
-    public void Wrong_scenario_is_rejected(byte scenario) =>
-        Assert.Null(Parse((Valid with { Scenario = scenario }).Build()));
+    public void Flags_byte_with_an_unknown_bit_is_rejected(byte flags) =>
+        Assert.Null(Parse((Valid with { Scenario = flags }).Build()));
 
     [Theory]
     [InlineData(new byte[0])]
@@ -396,7 +401,7 @@ public class RequestParseTests
             enc[0] = 4;
             var b = new RequestBuilder
             {
-                Scenario = (byte)rng.Next(2),
+                Scenario = (byte)rng.Next(4),
                 Uun = Enumerable.Range(0, rng.Next(1, 21)).Select(_ => (byte)rng.Next(0x21, 0x7F)).ToArray(),
                 Kid = Enumerable.Range(0, rng.Next(1, 33)).Select(_ => (byte)KidChars[rng.Next(KidChars.Length)]).ToArray(),
                 Enc = enc,
@@ -406,7 +411,8 @@ public class RequestParseTests
                 Verifier = RandomBytes(rng, 32),
             };
             using var r = Parse(b.Build())!;
-            Assert.Equal(b.Scenario == 1 ? Scenario.Unlock : Scenario.Logon, r.Scenario);
+            Assert.Equal((b.Scenario & 1) != 0 ? Scenario.Unlock : Scenario.Logon, r.Scenario);
+            Assert.Equal((b.Scenario & 2) != 0, r.Consent);
             Assert.Equal(Encoding.ASCII.GetString(b.Uun), r.Uun);
             Assert.Equal(Encoding.ASCII.GetString(b.Kid), r.Sealed.Kid);
             Assert.Equal(b.Enc, r.Sealed.Enc);

@@ -37,9 +37,12 @@ public class LoginHandlerTests
 
     private sealed record Outcome(ReplyResult Result, SignInMode Mode, string Message, string? LocalPassword, byte[] Wire);
 
-    private Outcome Login(string uun, string password, LoginHandler? handler = null, Scenario scenario = Scenario.Logon)
+    private Outcome Login(string uun, string password, LoginHandler? handler = null, Scenario scenario = Scenario.Logon,
+        bool consent = false)
     {
-        using var request = ProtocolCodec.TryParseRequest(RequestBuilder.For(uun, password, scenario).Build())!;
+        var b = RequestBuilder.For(uun, password, scenario);
+        if (consent) b = b with { Scenario = (byte)(b.Scenario | Protocol.FlagConsent) };
+        using var request = ProtocolCodec.TryParseRequest(b.Build())!;
         var outcome = Run(request, handler);
         AssertNoLeak(password, outcome);
         return outcome;
@@ -335,8 +338,9 @@ public class LoginHandlerTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Unmanaged_local_account_is_never_taken_over(bool enabled)
+    public void Unmanaged_local_account_is_never_taken_over_when_adoption_is_off(bool enabled)
     {
+        _settings = TestSettings.Create() with { AdoptPreexisting = false };
         _accounts.Add("alice", managed: false, enabled: enabled).Password = "theirs";
         foreach (var outcome in new ServerOutcome?[] { null, ServerOutcome.NoAnswer })
         {
@@ -348,6 +352,22 @@ public class LoginHandlerTests
         Assert.Equal(0, _accounts.Mutations);
         Assert.Equal("theirs", _accounts.All["alice"].Password);
         Assert.Empty(_secrets.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Force_local_backup_account_is_refused_at_the_tile(bool adoption)
+    {
+        _settings = TestSettings.Create() with { AdoptPreexisting = adoption };
+        _accounts.Add("backup", managed: false, forceLocal: true, admin: true).Password = "theirs";
+        var r = Login("backup", "alice-pw");
+        Assert.Equal(ReplyResult.Deny, r.Result);
+        Assert.Equal(LoginHandler.Messages.Excluded, r.Message);
+        Assert.Equal(0, _server.AuthCalls);
+        Assert.Equal(0, _accounts.Mutations);
+        Assert.Equal("theirs", _accounts.All["backup"].Password);
+        Assert.True(_audit.Has(AuditKind.Deny, Reason.ForceLocal));
     }
 
     public static TheoryData<string> BadUuns() =>
@@ -364,7 +384,7 @@ public class LoginHandlerTests
     [MemberData(nameof(BadUuns))]
     public void Bad_username_is_denied_without_lookup_or_logging_it(string uun)
     {
-        using var request = new LoginRequest(Scenario.Logon, uun,
+        using var request = new LoginRequest(Scenario.Logon, false, uun,
             new SealedPassword("k1", RequestBuilder.DefaultEnc(), FakeSeal.Seal("x-password"), 1, new byte[16]),
             FakeSeal.Verifier("x-password"));
         var r = Run(request);
@@ -596,6 +616,114 @@ public class LoginHandlerTests
         Assert.False(_audit.Has(AuditKind.AllowOnline));
         if (op != "SetOfflineFailures") Assert.False(_secrets.Verifiers.ContainsKey("bob"));
         Assert.All(_secrets.IssuedPasswords, p => Assert.All(p, c => Assert.Equal('\0', c)));
+    }
+
+    // ---- adopting a pre-existing account ----
+
+    [Fact]
+    public void Adoption_is_offered_before_anything_changes()
+    {
+        _accounts.Add("alice", managed: false, admin: false).Password = "theirs";
+        var r = Login("alice", "alice-pw");
+        Assert.Equal(ReplyResult.Adopt, r.Result);
+        Assert.Equal(LoginHandler.Messages.AdoptConsent, r.Message);
+        Assert.Null(r.LocalPassword);
+        Assert.Equal(1, _server.AuthCalls);              // the password was checked first
+        Assert.Equal(0, _accounts.Mutations);            // but nothing was taken over
+        Assert.Equal("theirs", _accounts.All["alice"].Password);
+        Assert.False(_accounts.All["alice"].Managed);
+        Assert.Empty(_secrets.Verifiers);
+    }
+
+    [Fact]
+    public void Consent_adopts_the_account_and_resets_its_password()
+    {
+        _accounts.Add("alice", managed: false).Password = "theirs";
+        var r = Login("alice", "alice-pw", consent: true);
+        Assert.Equal(ReplyResult.Ok, r.Result);
+        Assert.Equal(SignInMode.Online, r.Mode);
+        var a = _accounts.All["alice"];
+        Assert.True(a.Managed);
+        Assert.True(a.Enabled);
+        Assert.NotEqual("theirs", a.Password);           // its old local password no longer works
+        Assert.Equal(a.Password, r.LocalPassword);
+        Assert.Equal(a.Password, _secrets.LocalPasswords["alice"]);
+        Assert.Equal(FakeSeal.Verifier("alice-pw"), _secrets.Verifiers["alice"]);
+        Assert.Equal(_clock.UtcNow.AddDays(180), a.Expires);
+        Assert.True(_audit.Has(AuditKind.AccountAdopted));
+        Assert.True(_audit.Has(AuditKind.PasswordSet));
+        Assert.False(_audit.Has(AuditKind.AccountCreated));
+        Assert.Equal(["Find", "Adopt", "SetPassword", "SetExpiry", "EnsureUser"], _accounts.Calls);
+    }
+
+    [Fact]
+    public void Consent_adopts_an_admin_user_as_a_local_admin()
+    {
+        _accounts.Add("bob", managed: false).Password = "theirs";
+        var r = Login("bob", "bob-pw", consent: true);
+        Assert.Equal(ReplyResult.Ok, r.Result);
+        Assert.True(_accounts.All["bob"].Admin);
+        Assert.True(_audit.Has(AuditKind.AdminAdded, Reason.AdminSync));
+    }
+
+    [Fact]
+    public void Adoption_off_refuses_a_pre_existing_account()
+    {
+        _settings = TestSettings.Create() with { AdoptPreexisting = false };
+        _accounts.Add("alice", managed: false).Password = "theirs";
+        var r = Login("alice", "alice-pw", consent: true); // even with consent, policy wins
+        Assert.Equal(ReplyResult.Deny, r.Result);
+        Assert.Equal(LoginHandler.Messages.NotManaged, r.Message);
+        Assert.Equal(0, _server.AuthCalls);
+        Assert.Equal(0, _accounts.Mutations);
+    }
+
+    [Fact]
+    public void Wrong_password_on_an_adoptable_account_adopts_nothing()
+    {
+        _accounts.Add("alice", managed: false).Password = "theirs";
+        var r = Login("alice", "nope", consent: true);
+        Assert.Equal(ReplyResult.Deny, r.Result);
+        Assert.Equal(LoginHandler.Messages.InvalidCredentials, r.Message);
+        Assert.Equal(0, _accounts.Mutations);
+        Assert.False(_accounts.All["alice"].Managed);
+        Assert.Equal("theirs", _accounts.All["alice"].Password);
+    }
+
+    [Fact]
+    public void A_pre_existing_account_whose_user_is_not_authorised_is_left_untouched()
+    {
+        _accounts.Add("carol", managed: false, enabled: true).Password = "theirs";
+        var r = Login("carol", "carol-pw", consent: true); // carol authenticates but is not a user here
+        Assert.Equal(ReplyResult.Deny, r.Result);
+        Assert.Equal(LoginHandler.Messages.NotAuthorised, r.Message);
+        Assert.Equal(0, _accounts.Mutations);              // not adopted, and not disabled: it isn't ours
+        Assert.True(_accounts.All["carol"].Enabled);
+        Assert.False(_audit.Has(AuditKind.AccountDisabled));
+    }
+
+    [Fact]
+    public void Adoption_failure_is_an_error_without_a_password()
+    {
+        _accounts.Add("alice", managed: false).Password = "theirs";
+        _accounts.ThrowOn.Add("Adopt");
+        var r = Login("alice", "alice-pw", consent: true);
+        Assert.Equal(ReplyResult.Error, r.Result);
+        Assert.Equal(LoginHandler.Messages.AccountError, r.Message);
+        Assert.Null(r.LocalPassword);
+        Assert.Equal("Adopt failed", Assert.Single(_audit.Events, e => e.Kind == AuditKind.Error).Detail);
+        Assert.Empty(_secrets.Verifiers);
+    }
+
+    [Fact]
+    public void Rate_limit_still_applies_to_an_adoptable_account()
+    {
+        _accounts.Add("alice", managed: false);
+        var handler = Handler();
+        for (var i = 0; i < RateLimiter.MaxFailures; i++) Login("alice", "nope", handler);
+        var calls = _server.AuthCalls;
+        Assert.Equal(LoginHandler.Messages.RateLimited, Login("alice", "alice-pw", handler, consent: true).Message);
+        Assert.Equal(calls, _server.AuthCalls);
     }
 
     // ---- offline ----
@@ -935,6 +1063,7 @@ public class LoginHandlerTests
     [Fact]
     public void Exclusion_and_management_are_checked_before_the_rate_limit()
     {
+        _settings = TestSettings.Create() with { AdoptPreexisting = false };
         var limiter = new RateLimiter(_clock);
         for (var i = 0; i < 5; i++)
         {
@@ -974,7 +1103,7 @@ public class LoginHandlerTests
     // ---- messages and secrets ----
 
     [Fact]
-    public void Messages_are_the_expected_set() => Assert.Equal(13, AllMessages.Distinct().Count());
+    public void Messages_are_the_expected_set() => Assert.Equal(14, AllMessages.Distinct().Count());
 
     public static TheoryData<string> Messages() => [.. AllMessages];
 
@@ -997,7 +1126,8 @@ public class LoginHandlerTests
         {
             (_ => null, "Alice", "alice-pw"),
             (_ => null, "guest", "alice-pw"),
-            (x => { x._accounts.Add("alice", managed: false); return null; }, "alice", "alice-pw"),
+            (x => { x._settings = TestSettings.Create() with { AdoptPreexisting = false }; x._accounts.Add("alice", managed: false); return null; }, "alice", "alice-pw"),
+            (x => { x._accounts.Add("alice", managed: false); return null; }, "alice", "alice-pw"), // adoption offered
             (x =>
             {
                 var h = x.Handler();
@@ -1053,10 +1183,18 @@ public class LoginHandlerTests
 
 public class ReconcilerTests
 {
+    private readonly FakeClock _clock = new();
     private readonly FakeServer _server = new();
     private readonly FakeAccounts _accounts = new();
     private readonly FakeSecrets _secrets = new();
     private readonly ListAudit _audit = new();
+
+    private void Run(LoginSettings? settings = null) =>
+        new Reconciler(settings ?? TestSettings.Create(), _server, _accounts, _secrets, _audit, _clock).Run();
+
+    private string Summary() => _audit.Events.Last(e => e.Kind == AuditKind.CleanupRun).Detail!;
+
+    // ---- managed accounts: removed users, admin sync ----
 
     [Fact]
     public void Removed_user_loses_the_offline_verifier_even_if_already_disabled()
@@ -1072,36 +1210,36 @@ public class ReconcilerTests
     }
 
     [Fact]
-    public void No_answer_keeps_every_verifier()
+    public void No_answer_keeps_every_verifier_and_changes_nothing()
     {
         _accounts.Add("dave");
         _secrets.Verifiers["dave"] = new byte[32];
         _server.StatusFails = true;
         Run();
         Assert.True(_secrets.Verifiers.ContainsKey("dave"));
+        Assert.Equal(0, _accounts.Mutations);
+        Assert.True(_audit.Has(AuditKind.CleanupSkipped, Reason.ServerError));
+        Assert.False(_audit.Has(AuditKind.CleanupRun));
     }
 
-    private void Run() => new Reconciler(TestSettings.Create(), _server, _accounts, _secrets, _audit).Run();
-
-    private string Summary() => _audit.Events.Last(e => e.Kind == AuditKind.CleanupRun).Detail!;
-
     [Fact]
-    public void Disables_accounts_no_longer_users()
+    public void Disables_managed_accounts_no_longer_users()
     {
         _accounts.Add("alice");
         _accounts.Add("dave", admin: true);
+        _accounts.Add("backup", forceLocal: true, admin: true); // backstop admin, never touched
         _server.Users.Add("alice");
         Run();
         Assert.True(_accounts.All["alice"].Enabled);
         Assert.False(_accounts.All["dave"].Enabled);
         Assert.False(_accounts.All["dave"].Admin);
+        Assert.True(_accounts.All["backup"].Enabled);
         Assert.True(_audit.Has(AuditKind.AccountDisabled, Reason.RemovedFromUsers));
         Assert.True(_audit.Has(AuditKind.AdminRemoved, Reason.RemovedFromUsers));
-        Assert.Equal("2 managed, 2 changes", Summary());
     }
 
     [Fact]
-    public void Syncs_admins()
+    public void Syncs_admins_both_ways()
     {
         _accounts.Add("alice");
         _accounts.Add("bob", admin: true);
@@ -1117,69 +1255,203 @@ public class ReconcilerTests
     }
 
     [Fact]
-    public void Failed_read_changes_nothing()
+    public void Admin_without_user_is_not_admin()
     {
         _accounts.Add("alice");
-        _accounts.Add("bob", admin: true);
-        _server.StatusFails = true;
+        _accounts.Add("backup", forceLocal: true, admin: true);
+        _server.StatusOverride = asked => new StatusSnapshot(new HashSet<string>(), asked.ToHashSet());
         Run();
-        Assert.True(_accounts.All["alice"].Enabled);
-        Assert.Equal(0, _accounts.Mutations);
-        Assert.True(_audit.Has(AuditKind.CleanupSkipped, Reason.ServerError));
-        Assert.False(_audit.Has(AuditKind.CleanupRun));
+        Assert.False(_accounts.All["alice"].Admin);
+        Assert.False(_accounts.All["alice"].Enabled);
+    }
+
+    // ---- idle disable ----
+
+    [Fact]
+    public void Idle_managed_user_is_disabled()
+    {
+        _accounts.Add("alice", lastLogon: _clock.UtcNow.AddDays(-40));
+        _server.Users.Add("alice");
+        Run();
+        Assert.False(_accounts.All["alice"].Enabled);
+        Assert.False(_secrets.Verifiers.ContainsKey("alice"));
+        Assert.True(_audit.Has(AuditKind.AccountDisabled, Reason.Idle));
+        Assert.Equal("1 subjects, 1 changes", Summary());
+    }
+
+    [Theory]
+    [InlineData(-40, 30, false)]  // idle 40d, threshold 30d: disabled
+    [InlineData(-29, 30, true)]   // used 29d ago: kept
+    [InlineData(-31, 30, false)]
+    [InlineData(-30, 30, false)]  // exactly at the threshold: disabled
+    [InlineData(-400, 0, true)]   // idle disable off: kept
+    public void Idle_threshold(int lastLogonDays, int idleDays, bool stillEnabled)
+    {
+        _accounts.Add("alice", lastLogon: _clock.UtcNow.AddDays(lastLogonDays));
+        _server.Users.Add("alice");
+        Run(TestSettings.Create() with { IdleDisableDays = idleDays });
+        Assert.Equal(stillEnabled, _accounts.All["alice"].Enabled);
     }
 
     [Fact]
-    public void Leaves_unmanaged_and_excluded_accounts_alone()
+    public void A_user_that_never_logged_on_is_not_idle_reaped()
     {
-        _accounts.Add("someone", managed: false);
-        _accounts.Add("breakglass");
-        _accounts.Add("administrator", admin: true);
+        _accounts.Add("alice", lastLogon: null);
+        _server.Users.Add("alice");
         Run();
+        Assert.True(_accounts.All["alice"].Enabled);
+    }
+
+    [Fact]
+    public void An_already_disabled_idle_account_is_not_touched_again()
+    {
+        _accounts.Add("alice", enabled: false, lastLogon: _clock.UtcNow.AddDays(-99));
+        _server.Users.Add("alice");
+        Run();
+        Assert.Equal(0, _accounts.Mutations);
+        Assert.Equal("1 subjects, 0 changes", Summary());
+    }
+
+    // ---- lockdown of unmanaged, unprotected accounts ----
+
+    [Fact]
+    public void Lockdown_dry_run_reports_but_disables_nothing()
+    {
+        _accounts.Add("stranger", managed: false);
+        Run(); // LockdownEnforce is off by default
+        Assert.True(_accounts.All["stranger"].Enabled);
+        Assert.Equal(0, _accounts.Mutations);
+        Assert.True(_audit.Has(AuditKind.WouldDisable, Reason.Lockdown));
+    }
+
+    [Fact]
+    public void Lockdown_armed_disables_an_account_unknown_to_ldap()
+    {
+        _accounts.Add("stranger", managed: false);
+        _accounts.Add("backup", forceLocal: true, admin: true);
+        Run(TestSettings.Create() with { LockdownEnforce = true });
+        Assert.False(_accounts.All["stranger"].Enabled);
+        Assert.True(_audit.Has(AuditKind.AccountDisabled, Reason.Lockdown));
+        Assert.False(_audit.Has(AuditKind.WouldDisable));
+    }
+
+    [Fact]
+    public void Lockdown_leaves_an_unmanaged_account_known_to_ldap_alone()
+    {
+        _accounts.Add("alice", managed: false); // a valid UUN the server knows: adopted at next sign-in
+        _server.Users.Add("alice");
+        Run(TestSettings.Create() with { LockdownEnforce = true });
+        Assert.True(_accounts.All["alice"].Enabled);
+        Assert.Equal(0, _accounts.Mutations);
+        Assert.Contains("alice", Assert.Single(_server.StatusRequests));
+    }
+
+    [Fact]
+    public void Lockdown_disables_an_account_whose_name_cannot_be_an_ldap_user()
+    {
+        _accounts.Add("Mixed", managed: false);     // not a valid UUN: never asked about, cannot be a user
+        _accounts.Add("has space", managed: false);
+        _accounts.Add("backup", forceLocal: true, admin: true);
+        Run(TestSettings.Create() with { LockdownEnforce = true });
+        Assert.False(_accounts.All["Mixed"].Enabled);
+        Assert.False(_accounts.All["has space"].Enabled);
+        Assert.Empty(_server.StatusRequests); // no valid-UUN subjects to ask about
+    }
+
+    [Fact]
+    public void An_already_disabled_stranger_is_not_touched_under_lockdown()
+    {
+        _accounts.Add("stranger", managed: false, enabled: false);
+        Run(TestSettings.Create() with { LockdownEnforce = true });
+        Assert.Equal(0, _accounts.Mutations);
+        Assert.False(_audit.Has(AuditKind.WouldDisable));
+    }
+
+    [Fact]
+    public void A_lockdown_no_answer_changes_nothing()
+    {
+        _accounts.Add("alice", managed: false); // valid UUN forces a status read
+        _accounts.Add("stranger", managed: false);
+        _server.StatusFails = true;
+        Run(TestSettings.Create() with { LockdownEnforce = true });
+        Assert.True(_accounts.All["stranger"].Enabled);
+        Assert.Equal(0, _accounts.Mutations);
+        Assert.True(_audit.Has(AuditKind.CleanupSkipped, Reason.ServerError));
+    }
+
+    // ---- never touches protected accounts ----
+
+    [Fact]
+    public void Leaves_excluded_and_force_local_accounts_alone()
+    {
+        _accounts.Add("someone", managed: false, forceLocal: true);
+        _accounts.Add("breakglass"); // excluded by TestSettings
+        _accounts.Add("administrator", admin: true);
+        Run(TestSettings.Create() with { LockdownEnforce = true });
         Assert.True(_accounts.All["someone"].Enabled);
         Assert.True(_accounts.All["breakglass"].Enabled);
         Assert.True(_accounts.All["administrator"].Admin);
         Assert.Empty(_server.StatusRequests);
+        Assert.Equal("0 subjects, 0 changes", Summary());
     }
 
+    // ---- last-admin invariant ----
+
     [Fact]
-    public void Only_managed_valid_non_excluded_names_are_sent()
+    public void The_last_enabled_admin_is_never_disabled()
     {
-        _accounts.Add("alice");
-        _accounts.Add("bob", enabled: false);
-        _accounts.Add("someone", managed: false);
-        _accounts.Add("breakglass");
-        _accounts.Add("guest");
-        _accounts.Add("Mixed");
-        _accounts.Add("has space");
-        _accounts.Add("waytoolongforauunname1");
-        _accounts.Add("x$");
+        _accounts.Add("alice", admin: true, lastLogon: _clock.UtcNow.AddDays(-99)); // idle, and the only admin
+        _server.Users.Add("alice");
         Run();
-        var asked = Assert.Single(_server.StatusRequests);
-        Assert.Equal(["alice", "bob"], asked.Order());
-        Assert.Equal(0, _accounts.Calls.Count(c => c != "ListManaged" && c != "SetEnabled"));
-        Assert.True(_accounts.All["Mixed"].Enabled);
-        Assert.True(_accounts.All["has space"].Enabled);
+        Assert.True(_accounts.All["alice"].Enabled);
+        Assert.True(_audit.Has(AuditKind.DisableSkipped, Reason.LastAdmin));
+        Assert.False(_audit.Has(AuditKind.AccountDisabled));
     }
 
     [Fact]
-    public void No_managed_accounts_makes_no_server_call()
+    public void A_protected_backup_admin_lets_the_last_managed_admin_be_disabled()
     {
-        _accounts.Add("someone", managed: false);
+        _accounts.Add("alice", admin: true, lastLogon: _clock.UtcNow.AddDays(-99));
+        _accounts.Add("backup", forceLocal: true, admin: true); // the backstop
+        _server.Users.Add("alice");
+        Run();
+        Assert.False(_accounts.All["alice"].Enabled);
+        Assert.True(_audit.Has(AuditKind.AccountDisabled, Reason.Idle));
+    }
+
+    [Fact]
+    public void With_two_managed_admins_removed_one_is_kept_as_the_backstop()
+    {
+        _accounts.Add("alice", admin: true);
+        _accounts.Add("bob", admin: true);
+        // Neither is a user any more: one disable must be declined so an enabled admin remains.
+        Run(TestSettings.Create() with { LockdownEnforce = true });
+        var enabled = new[] { "alice", "bob" }.Count(n => _accounts.All[n].Enabled);
+        Assert.Equal(1, enabled);
+        Assert.True(_audit.Has(AuditKind.DisableSkipped, Reason.LastAdmin));
+    }
+
+    // ---- framing, batching, failure handling ----
+
+    [Fact]
+    public void No_subjects_makes_no_server_call()
+    {
+        _accounts.Add("breakglass"); // excluded
+        _accounts.Add("backup", forceLocal: true);
         Run();
         Assert.Empty(_server.StatusRequests);
-        Assert.Equal("0 managed, 0 changes", Summary());
+        Assert.Equal("0 subjects, 0 changes", Summary());
     }
 
     [Fact]
     public void Listing_failure_is_skipped_without_a_server_call()
     {
         _accounts.Add("alice");
-        _accounts.ThrowOn.Add("ListManaged");
+        _accounts.ThrowOn.Add("ListAll");
         Run();
         Assert.Empty(_server.StatusRequests);
         var e = Assert.Single(_audit.Events);
-        Assert.Equal(new AuditEvent(AuditKind.CleanupSkipped, "-", Reason.AccountError, "ListManaged failed"), e);
+        Assert.Equal(new AuditEvent(AuditKind.CleanupSkipped, "-", Reason.AccountError, "ListAll failed"), e);
     }
 
     [Fact]
@@ -1189,14 +1461,13 @@ public class ReconcilerTests
         _accounts.Add("bob");
         _accounts.Add("carol");
         _accounts.ThrowFor.Add("bob");
-        Run();
+        Run(); // none are users: all would be disabled
         Assert.False(_accounts.All["alice"].Enabled);
         Assert.True(_accounts.All["bob"].Enabled);
         Assert.False(_accounts.All["carol"].Enabled);
         var e = Assert.Single(_audit.Events, e => e.Kind == AuditKind.Error);
         Assert.Equal("bob", e.Uun);
         Assert.Equal(Reason.AccountError, e.Reason);
-        Assert.Equal("3 managed, 2 changes", Summary());
     }
 
     [Theory]
@@ -1205,6 +1476,7 @@ public class ReconcilerTests
     public void Each_operation_failure_is_audited(string op)
     {
         _accounts.Add("alice", admin: true);
+        _accounts.Add("backup", forceLocal: true, admin: true);
         _accounts.ThrowOn.Add(op);
         Run();
         Assert.Equal($"{op} failed", Assert.Single(_audit.Events, e => e.Kind == AuditKind.Error).Detail);
@@ -1222,33 +1494,22 @@ public class ReconcilerTests
     }
 
     /// <summary>
-    /// Every combination of local (enabled, admin) and server (user, admin): disabled iff no longer a user;
+    /// Every combination of local (enabled, admin) and server (user, admin) for a managed account, with a
+    /// force-local backstop present so the last-admin guard never interferes: disabled iff no longer a user;
     /// admin iff user and admin. Never enables anyone (only an online sign-in does).
     /// </summary>
     [Theory]
     [MemberData(nameof(Table))]
-    public void Decision_table(bool enabled, bool admin, bool user, bool serverAdmin, bool disables, bool adminAfter)
+    public void Managed_decision_table(bool enabled, bool admin, bool user, bool serverAdmin, bool disables, bool adminAfter)
     {
         _accounts.Add("alice", enabled: enabled, admin: admin);
+        _accounts.Add("backup", forceLocal: true, admin: true, enabled: true);
         if (user) _server.Users.Add("alice");
         if (serverAdmin) _server.Admins.Add("alice");
         Run();
         var a = _accounts.All["alice"];
         Assert.Equal(enabled && !disables, a.Enabled);
         Assert.Equal(adminAfter, a.Admin);
-        var changes = (disables ? 1 : 0) + (admin != adminAfter ? 1 : 0);
-        Assert.Equal(changes, _accounts.Mutations);
-        Assert.Equal($"1 managed, {changes} changes", Summary());
-    }
-
-    [Fact]
-    public void Admin_without_user_is_not_admin()
-    {
-        _accounts.Add("alice");
-        _server.StatusOverride = _ => new StatusSnapshot(new HashSet<string>(), new HashSet<string> { "alice" });
-        Run();
-        Assert.False(_accounts.All["alice"].Admin);
-        Assert.False(_accounts.All["alice"].Enabled);
     }
 
     [Theory]
@@ -1266,7 +1527,6 @@ public class ReconcilerTests
         Assert.Equal(requests, _server.StatusRequests.Count);
         Assert.All(_server.StatusRequests, r => Assert.InRange(r.Length, 1, ServerMessages.MaxStatusUuns));
         Assert.Equal(names.Order(), _server.StatusRequests.SelectMany(r => r).Order());
-        // Every account is still a user: none may be disabled because it fell outside one request.
         Assert.All(_accounts.All.Values, a => Assert.True(a.Enabled));
         Assert.Equal(0, _accounts.Mutations);
     }

@@ -18,6 +18,7 @@ public sealed class LoginHandler(
         public const string BadFormat = "Enter your username (lower-case letters and digits).";
         public const string Excluded = "This account can't sign in here. Use the standard Windows sign-in.";
         public const string NotManaged = "A local account with this name already exists and isn't managed by WELDAP sign-in.";
+        public const string AdoptConsent = "This PC already has a local account with your name. Continue to sign in with your network account from now on (its current local password will stop working), or log out.";
         public const string RateLimited = "Too many failed attempts. Try again in 5 minutes.";
         public const string InvalidCredentials = "The username or password is incorrect.";
         public const string NotAuthorised = "You aren't allowed to sign in to this PC.";
@@ -45,7 +46,15 @@ public sealed class LoginHandler(
         {
             return Fail(uun, Reason.AccountError, ex.Message, Messages.AccountError);
         }
-        if (local is { IsManaged: false }) return Deny(uun, Reason.NotManaged, Messages.NotManaged);
+        // A pre-existing local account WELDAP does not manage: a protected backup account is left to the standard
+        // tile; otherwise, with adoption on, it is taken over after the user consents (below); off, it is refused.
+        var adopting = false;
+        if (local is { IsManaged: false })
+        {
+            if (local.IsForceLocal) return Deny(uun, Reason.ForceLocal, Messages.Excluded);
+            if (!settings.AdoptPreexisting) return Deny(uun, Reason.NotManaged, Messages.NotManaged);
+            adopting = true;
+        }
         if (limiter.IsBlocked(uun)) return Deny(uun, Reason.RateLimited, Messages.RateLimited);
 
         var answer = server.Authenticate(uun, request.Scenario, request.Sealed);
@@ -69,13 +78,25 @@ public sealed class LoginHandler(
         limiter.RecordSuccess(uun);
         if (!user.IsUser)
         {
-            if (local is { Enabled: true }) TryDisable(uun, Reason.RemovedFromUsers);
+            // Only ever disable an account WELDAP manages; a pre-existing account we were about to adopt is left
+            // untouched (the server just says this person may not sign in here).
+            if (local is { IsManaged: true, Enabled: true }) TryDisable(uun, Reason.RemovedFromUsers);
             return Deny(uun, Reason.NotAuthorised, Messages.NotAuthorised);
         }
+
+        // The user is real: before taking over a pre-existing account, make them accept the warning (Continue),
+        // unless they already did (a resubmit carrying consent). Nothing is changed until they do.
+        if (adopting && !request.Consent) return LoginReply.Adopt(Messages.AdoptConsent);
 
         char[] localPassword;
         try
         {
+            if (adopting)
+            {
+                accounts.Adopt(uun);
+                audit.Write(new AuditEvent(AuditKind.AccountAdopted, uun));
+                local = local! with { IsManaged = true };
+            }
             localPassword = SyncAccount(uun, local, user, request.Verifier);
         }
         catch (LocalAccountException ex)

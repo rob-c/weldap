@@ -13,10 +13,15 @@ namespace Weldap.Service;
 internal sealed unsafe class LocalAccounts : ILocalAccounts
 {
     private const string _managedGroup = LoginSettings.ManagedGroup;
+    private const string _forceLocalGroup = LoginSettings.ForceLocalGroup;
     private readonly string _administrators = GroupName(WellKnownSidType.BuiltinAdministratorsSid);
     private readonly string _users = GroupName(WellKnownSidType.BuiltinUsersSid);
 
-    public LocalAccounts() => EnsureManagedGroup();
+    public LocalAccounts()
+    {
+        EnsureGroup(_managedGroup, "Local accounts created and managed by WELDAP");
+        EnsureGroup(_forceLocalGroup, "Protected backup accounts WELDAP never adopts, disables or locks out");
+    }
 
     private static string GroupName(WellKnownSidType type)
     {
@@ -25,15 +30,15 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
         return value[(value.IndexOf('\\') + 1)..];
     }
 
-    private void EnsureManagedGroup()
+    private static void EnsureGroup(string group, string comment)
     {
-        fixed (char* name = _managedGroup)
-        fixed (char* comment = "Local accounts created and managed by WELDAP")
+        fixed (char* name = group)
+        fixed (char* c = comment)
         {
-            var info = new LOCALGROUP_INFO_1 { lgrpi1_name = name, lgrpi1_comment = comment };
+            var info = new LOCALGROUP_INFO_1 { lgrpi1_name = name, lgrpi1_comment = c };
             var rc = NetLocalGroupAdd(null, 1, &info, out _);
             if (rc is not (NERR_Success or NERR_GroupExists or ERROR_ALIAS_EXISTS))
-                throw new LocalAccountException($"create group {_managedGroup}: {rc}", (int)rc);
+                throw new LocalAccountException($"create group {group}: {rc}", (int)rc);
         }
     }
 
@@ -51,12 +56,18 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
             var expires = info->usri2_acct_expires == TIMEQ_FOREVER
                 ? (DateTimeOffset?)null
                 : DateTimeOffset.FromUnixTimeSeconds(info->usri2_acct_expires);
+            // usri2_last_logon is seconds since the Unix epoch, or 0 when the account has never logged on.
+            var lastLogon = info->usri2_last_logon == 0
+                ? (DateTimeOffset?)null
+                : DateTimeOffset.FromUnixTimeSeconds(info->usri2_last_logon);
             return new LocalAccount(
                 new string(info->usri2_name),
                 IsManaged: groups.Contains(_managedGroup, StringComparer.OrdinalIgnoreCase),
                 Enabled: (info->usri2_flags & UF_ACCOUNTDISABLE) == 0,
                 IsAdmin: groups.Contains(_administrators, StringComparer.OrdinalIgnoreCase),
-                Expires: expires);
+                Expires: expires,
+                IsForceLocal: groups.Contains(_forceLocalGroup, StringComparer.OrdinalIgnoreCase),
+                LastLogon: lastLogon);
         }
         finally
         {
@@ -83,24 +94,39 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
         }
     }
 
-    public IReadOnlyList<LocalAccount> ListManaged()
+    public IReadOnlyList<LocalAccount> ListAll()
     {
         var names = new List<string>();
         IntPtr buf;
         uint rc, read;
-        fixed (char* g = _managedGroup) rc = NetLocalGroupGetMembers(null, g, 1, out buf, MAX_PREFERRED_LENGTH, out read, out _, null);
-        if (rc != NERR_Success) throw new LocalAccountException($"members of {_managedGroup}: {rc}", (int)rc);
+        rc = NetUserEnum(null, 0, FILTER_NORMAL_ACCOUNT, out buf, MAX_PREFERRED_LENGTH, out read, out _, null);
+        if (rc != NERR_Success) throw new LocalAccountException($"enumerate users: {rc}", (int)rc);
         try
         {
-            var entries = (LOCALGROUP_MEMBERS_INFO_1*)buf;
-            for (var i = 0; i < read; i++)
-                if (entries[i].lgrmi1_sidusage == SidTypeUser) names.Add(new string(entries[i].lgrmi1_name));
+            var entries = (USER_INFO_0*)buf;
+            for (var i = 0; i < read; i++) names.Add(new string(entries[i].usri0_name));
         }
         finally
         {
             _ = NetApiBufferFree(buf);
         }
+        // Find each by name: an account that vanishes between the enumeration and the lookup is simply dropped.
         return names.Select(Find).OfType<LocalAccount>().ToList();
+    }
+
+    public void Adopt(string name)
+    {
+        // Bring a pre-existing account under management in place (same SID and profile); the caller then resets
+        // its local password and syncs it. EnsureUser needs the managed membership first.
+        if (Find(name) is null) throw new LocalAccountException($"{name} not found");
+        ChangeMembership(_managedGroup, name, add: true);
+        EnsureUser(name);
+    }
+
+    public void SetForceLocal(string name, bool forceLocal)
+    {
+        if (Find(name) is null) throw new LocalAccountException($"{name} not found");
+        ChangeMembership(_forceLocalGroup, name, add: forceLocal);
     }
 
     public void Create(string name, ReadOnlySpan<char> password)

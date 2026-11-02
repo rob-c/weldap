@@ -12,9 +12,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BUDGETS = {
     "credential provider (C++, in LogonUI)": (["client/Weldap.CredentialProvider/*.cpp", "client/Weldap.CredentialProvider/*.h",
                                               "client/Weldap.Shared/*.h"], 2140),  # -40: dropped unreachable CredUI/TS serialization branches
-    "client service (C#)": (["client/Weldap.Service/*.cs"], 920),
-    "client core (C#)": (["client/Weldap.Core/*.cs"], 830),  # +70: ServerTransport + AuditFormat moved in from the Service for host-side test coverage
+    "client service (C#)": (["client/Weldap.Service/*.cs"], 975),  # +35 ListAll/Adopt/SetForceLocal, force-local; +20 integrity pins for service+admin
+    "client core (C#)": (["client/Weldap.Core/*.cs"], 905),  # +70 ServerTransport/AuditFormat; +75 adoption, lockdown/idle reconcile, force-local
     "server (Rust)": (["server/src/*.rs"], 1160),
+    "admin CLI (C#)": (["client/Weldap.Admin/*.cs"], 180),  # weldapadm: elevated local account manager
 }
 
 

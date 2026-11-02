@@ -52,6 +52,7 @@ internal static class FakeSeal
 internal sealed record RequestBuilder
 {
     public byte Version { get; init; } = Protocol.Version;
+    /// <summary>The raw flags byte (position 1): bit0 scenario-unlock, bit1 consent. Tests set it directly.</summary>
     public byte Scenario { get; init; }
     public byte[] Uun { get; init; } = "alice"u8.ToArray();
     public byte[] Kid { get; init; } = "k1"u8.ToArray();
@@ -122,7 +123,7 @@ internal sealed record RequestBuilder
 /// </summary>
 internal static class SpecParser
 {
-    public sealed record Parsed(Scenario Scenario, string Uun, string Kid, byte[] Enc, byte[] Ct, long Ts, byte[] Rid, byte[] Verifier);
+    public sealed record Parsed(Scenario Scenario, bool Consent, string Uun, string Kid, byte[] Enc, byte[] Ct, long Ts, byte[] Rid, byte[] Verifier);
 
     public static Parsed? Parse(byte[] m)
     {
@@ -131,8 +132,9 @@ internal static class SpecParser
         try
         {
             if (r.ReadByte() != 3) return null;
-            var scenario = r.ReadByte();
-            if (scenario > 1) return null;
+            var flags = r.ReadByte();
+            if ((flags & ~0x03) != 0) return null;
+            var consent = (flags & 0x02) != 0;
             var uunLen = r.ReadByte();
             if (uunLen is < 1 or > 20) return null;
             var uun = Exactly(r, uunLen);
@@ -151,7 +153,7 @@ internal static class SpecParser
             var rid = Exactly(r, 16);
             var verifier = Exactly(r, 32);
             if (r.BaseStream.Position != m.Length) return null;
-            return new Parsed(scenario == 0 ? Scenario.Logon : Scenario.Unlock, Encoding.ASCII.GetString(uun),
+            return new Parsed((flags & 0x01) != 0 ? Scenario.Unlock : Scenario.Logon, consent, Encoding.ASCII.GetString(uun),
                 Encoding.ASCII.GetString(kid), enc, ct, ts, rid, verifier);
         }
         catch (EndOfStreamException)
@@ -218,8 +220,10 @@ internal sealed class FakeAccounts : ILocalAccounts
         public bool Enabled { get; set; } = true;
         public bool Admin { get; set; }
         public bool User { get; set; } = true;
+        public bool ForceLocal { get; set; }
         public string Password { get; set; } = "";
         public DateTimeOffset? Expires { get; set; }
+        public DateTimeOffset? LastLogon { get; set; }
     }
 
     public Dictionary<string, Acct> All { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -230,10 +234,20 @@ internal sealed class FakeAccounts : ILocalAccounts
     public HashSet<string> ThrowFor { get; } = [];
     public bool Throw { get; set; }
 
-    public int Mutations => Calls.Count(c => c is not ("Find" or "ListManaged"));
+    public int Mutations => Calls.Count(c => c is not ("Find" or "ListAll"));
 
-    public Acct Add(string name, bool managed = true, bool enabled = true, bool admin = false, DateTimeOffset? expires = null) =>
-        All[name] = new Acct { Name = name, Managed = managed, Enabled = enabled, Admin = admin, Expires = expires };
+    public Acct Add(string name, bool managed = true, bool enabled = true, bool admin = false,
+        DateTimeOffset? expires = null, bool forceLocal = false, DateTimeOffset? lastLogon = null) =>
+        All[name] = new Acct
+        {
+            Name = name,
+            Managed = managed,
+            Enabled = enabled,
+            Admin = admin,
+            Expires = expires,
+            ForceLocal = forceLocal,
+            LastLogon = lastLogon,
+        };
 
     private void Op(string op, string? name = null)
     {
@@ -242,22 +256,33 @@ internal sealed class FakeAccounts : ILocalAccounts
             throw new LocalAccountException($"{op} failed", 5);
     }
 
+    private static LocalAccount Snapshot(Acct a) =>
+        new(a.Name, a.Managed, a.Enabled, a.Admin, a.Expires, a.ForceLocal, a.LastLogon);
+
     public LocalAccount? Find(string name)
     {
         Op("Find");
-        return All.TryGetValue(name, out var a) ? new LocalAccount(a.Name, a.Managed, a.Enabled, a.Admin, a.Expires) : null;
+        return All.TryGetValue(name, out var a) ? Snapshot(a) : null;
     }
 
-    public IReadOnlyList<LocalAccount> ListManaged()
+    public IReadOnlyList<LocalAccount> ListAll()
     {
-        Op("ListManaged");
-        return All.Values.Where(a => a.Managed).Select(a => new LocalAccount(a.Name, true, a.Enabled, a.Admin, a.Expires)).ToList();
+        Op("ListAll");
+        return All.Values.Select(Snapshot).ToList();
     }
 
     public void Create(string name, ReadOnlySpan<char> password)
     {
         Op("Create", name);
         All[name] = new Acct { Name = name, Password = password.ToString() };
+    }
+
+    public void Adopt(string name)
+    {
+        Op("Adopt", name);
+        var a = All[name];
+        a.Managed = true;
+        a.User = true;
     }
 
     public void SetPassword(string name, ReadOnlySpan<char> password)
@@ -288,6 +313,12 @@ internal sealed class FakeAccounts : ILocalAccounts
     {
         Op("EnsureUser", name);
         All[name].User = true;
+    }
+
+    public void SetForceLocal(string name, bool forceLocal)
+    {
+        Op("SetForceLocal", name);
+        All[name].ForceLocal = forceLocal;
     }
 }
 

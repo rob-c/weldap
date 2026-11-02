@@ -14,10 +14,16 @@
 #define WELDAP_SCENARIO_LOGON      "logon"    // in the sealed AAD
 #define WELDAP_SCENARIO_UNLOCK     "unlock"
 
+// Request flags byte (position 1): scenario in bit0, adoption consent in bit1. Neither enters the sealed AAD;
+// the server never sees them -- they steer the client/service pipe exchange only.
+#define WELDAP_FLAG_SCENARIO_UNLOCK 0x01
+#define WELDAP_FLAG_CONSENT         0x02
+
 // Reply result byte.
 #define WELDAP_RESULT_OK           0
 #define WELDAP_RESULT_DENY         1
 #define WELDAP_RESULT_ERROR        2
+#define WELDAP_RESULT_ADOPT        3          // account can be adopted; show the warning, resubmit with consent
 
 // Well-known SID both ends require of the other end's process token.
 #define WELDAP_REQUIRED_PEER_SID   L"S-1-5-18"

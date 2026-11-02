@@ -88,6 +88,18 @@ VALUE_GROUPS: dict[str, list[tuple[str, str]]] = {
         (CPP_PROTO, r"#define\s+WELDAP_RESULT_ERROR\s+(\d+)"),
         (CS_PROTO, r"\bError\s*=\s*(\d+)"),
     ],
+    "reply result ADOPT": [
+        (CPP_PROTO, r"#define\s+WELDAP_RESULT_ADOPT\s+(\d+)"),
+        (CS_PROTO, r"\bAdopt\s*=\s*(\d+)"),
+    ],
+    "request flag consent": [
+        (CPP_PROTO, r"#define\s+WELDAP_FLAG_CONSENT\s+(0x[0-9a-fA-F]+)"),
+        (CS_PROTO, r"\bconst\s+byte\s+FlagConsent\s*=\s*(0x[0-9a-fA-F]+)"),
+    ],
+    "request flag scenario-unlock": [
+        (CPP_PROTO, r"#define\s+WELDAP_FLAG_SCENARIO_UNLOCK\s+(0x[0-9a-fA-F]+)"),
+        (CS_PROTO, r"\bconst\s+byte\s+FlagScenarioUnlock\s*=\s*(0x[0-9a-fA-F]+)"),
+    ],
     "HPKE info string": [
         (CPP_SEAL_C, r'c_szInfo\[\]\s*=\s*"([^"]*)"'),
         (RS_SEAL, r'\bconst\s+INFO:\s*&\[u8\]\s*=\s*b"([^"]*)"'),

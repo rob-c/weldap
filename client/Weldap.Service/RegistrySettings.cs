@@ -40,6 +40,7 @@ internal static unsafe class RegistrySettings
         string Str(string name) => key.GetValue(name) as string is { Length: > 0 } s
             ? s : throw new InvalidOperationException($"{name} not set");
         int Dword(string name, int fallback) => key.GetValue(name) is int i ? i : fallback;
+        bool Flag(string name, bool fallback) => Dword(name, fallback ? 1 : 0) != 0;
         var settings = new LoginSettings
         {
             ServerHost = Str("ServerHost"),
@@ -48,6 +49,9 @@ internal static unsafe class RegistrySettings
             ExcludedAccounts = SettingsText.SplitList(key.GetValue("ExcludedAccounts")).Select(s => s.ToLowerInvariant()).ToArray(),
             MaxOfflineDays = Math.Clamp(Dword("MaxOfflineDays", 180), 0, 3650),
             OfflineMaxFailures = Math.Clamp(Dword("OfflineMaxFailures", 10), 1, 100),
+            AdoptPreexisting = Flag("AdoptPreexisting", true),
+            LockdownEnforce = Flag("LockdownEnforce", false),
+            IdleDisableDays = Math.Clamp(Dword("IdleDisableDays", 30), 0, 3650),
         };
         return SettingsText.Validate(settings);
     }

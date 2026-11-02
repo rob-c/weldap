@@ -39,7 +39,7 @@ internal sealed partial class LoginWorker(ILogger<LoginWorker> log, ILogger<Pipe
         var secrets = new RegistrySecretStore();
         var server = new ServerClient(settings);
         var handler = new LoginHandler(settings, server, accounts, secrets, audit, clock, new RateLimiter(clock));
-        var reconciler = new Reconciler(settings, server, accounts, secrets, audit);
+        var reconciler = new Reconciler(settings, server, accounts, secrets, audit, clock);
 
         var pipe = new PipeServer(request => { lock (_gate) return handler.Handle(request); }, pipeLog);
         var cleanup = Task.Run(async () =>

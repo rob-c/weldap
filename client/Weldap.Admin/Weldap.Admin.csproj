@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- weldapadm: an elevated, local account lister/viewer/manager for WELDAP. It works on the local SAM
+       directly through Weldap.Service, never over the service's locked-down pipe, and needs local admin. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Weldap.Admin</RootNamespace>
+    <AssemblyName>weldapadm</AssemblyName>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <ServerGarbageCollector>false</ServerGarbageCollector>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Weldap.Core/Weldap.Core.csproj" />
+  </ItemGroup>
+  <!-- Reuse the service's local-account/registry code by compiling the same source files in (rather than
+       referencing the service exe, which a self-contained publish forbids). They stay owned by Weldap.Service
+       (the budget counts them there); weldapadm gets its own private copy for its own process. -->
+  <ItemGroup>
+    <Compile Include="../Weldap.Service/Native.cs" Link="Shared/Native.cs" />
+    <Compile Include="../Weldap.Service/LocalAccounts.cs" Link="Shared/LocalAccounts.cs" />
+    <Compile Include="../Weldap.Service/RegistrySettings.cs" Link="Shared/RegistrySettings.cs" />
+  </ItemGroup>
+</Project>

@@ -17,8 +17,16 @@ public sealed record LoginSettings
     public int MaxOfflineDays { get; init; } = 180;
     /// <summary>Consecutive wrong offline passwords before offline sign-in stops until the next online one.</summary>
     public int OfflineMaxFailures { get; init; } = 10;
+    /// <summary>Take over a pre-existing local account that shares an LDAP user's name (after the user consents).</summary>
+    public bool AdoptPreexisting { get; init; } = true;
+    /// <summary>Arm the lockdown: actually disable accounts unknown to LDAP. Off = report only (dry run).</summary>
+    public bool LockdownEnforce { get; init; }
+    /// <summary>Disable a managed account with no interactive logon for this many days; 0 = never.</summary>
+    public int IdleDisableDays { get; init; } = 30;
 
     public const string ManagedGroup = "WELDAP-Managed";
+    /// <summary>Protected backup accounts that WELDAP never adopts, disables or idle-reaps (always work locally).</summary>
+    public const string ForceLocalGroup = "WELDAP-ForceLocal";
     /// <summary>Friendly name of this device's registered certificate in LocalMachine\My (SR-14), set by
     /// register-device.ps1; the newest currently valid one with its private key is used.</summary>
     public const string DeviceCertificateName = "WELDAP device";
