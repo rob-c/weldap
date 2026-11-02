@@ -5,6 +5,7 @@ each responsibility lives, the trust and data flow, and the invariants that must
 and the *shape*; the companions are:
 
 - `client/Weldap.Shared/PROTOCOL.md` — the exact bytes on each wire (pipe v3 and server v1).
+- `docs/CONFIGURATION.md` — installing, every registry setting, the local-account model, `weldapadm`, signing.
 - `docs/REQUIREMENTS.md` — the authoritative functional (FR-*) and security (SR-*) requirements.
 - `SECURITY.md` — the threat model and how to report a vulnerability.
 - `README.md` — building, the test VMs, and running the gates; `CONTRIBUTING.md` — the gate workflow.
