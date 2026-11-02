@@ -207,20 +207,37 @@ Two independent mechanisms:
 > never as the control.
 
 Signing is **off by default** — an unsigned build is a valid dev build, exactly as an unset `ProviderHash` means
-"not pinned." To produce a signed MSI, set one of these in the build VM before `vm/build-in-vm.sh` runs
-`vm/provision/build-msi.ps1`:
+"not pinned." To produce a signed MSI, set one of these **on the host** before running `vm/build-in-vm.sh`; it
+forwards them into the build VM session, where `vm/provision/build-msi.ps1` uses them:
 
 | Variable | Meaning |
 | --- | --- |
-| `WELDAP_SIGN_THUMBPRINT` | SHA-1 thumbprint of a code-signing cert in `Cert:\*\My`. |
-| `WELDAP_SIGN_PFX` (+ `WELDAP_SIGN_PFX_PASSWORD`) | Path to a PFX file and its password. |
+| `WELDAP_SIGN_THUMBPRINT` | SHA-1 thumbprint of a code-signing cert in the build VM's `Cert:\LocalMachine\My`. |
+| `WELDAP_SIGN_PFX` (+ `WELDAP_SIGN_PFX_PASSWORD`) | Path (in the build VM) to a PFX file and its password. |
 | `WELDAP_SIGN_TIMESTAMP_URL` | RFC-3161 timestamp server (default: DigiCert). |
 
-The build **signs each binary first, then pins the hash of the signed bytes**, then builds and signs the MSI —
-so the service's check matches what shipped, and a patched binary fails both the signature and the pin. For
-production use an OV/EV code-signing certificate; a self-signed certificate is fine for validating the pipeline
-in a test VM (install its public cert into the device's Trusted Publishers / Root for Windows to honour the
-signature). See `docs/RELEASING.md` for the release flow.
+The build runs as SYSTEM, so a thumbprint cert must live in the **Local Machine** store (`Cert:\LocalMachine\My`),
+not a per-user store — the tooling signs with `signtool /sm` to match. The build **signs each binary first, then
+pins the SHA-256 of the signed bytes**, then builds and signs the MSI, so the service's check matches exactly
+what shipped and a patched binary fails both the signature and the pin.
+
+For production use an OV/EV code-signing certificate. For validating the pipeline in a test VM a self-signed
+certificate is fine — create and trust one **in the build VM**:
+
+```powershell
+$cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=WELDAP dev code signing' `
+    -KeyAlgorithm RSA -KeyLength 3072 -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddYears(3)
+# so Windows honours the signature locally (test VM only):
+foreach ($s in 'Root', 'TrustedPublisher') {
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new($s, 'LocalMachine')
+    $store.Open('ReadWrite'); $store.Add($cert); $store.Close()
+}
+$cert.Thumbprint   # use as WELDAP_SIGN_THUMBPRINT
+```
+
+After a signed build, verify the pins match the signed binaries (the service checks the same hashes at startup):
+`Get-FileHash` each of `WeldapService.exe` / `weldapadm.exe` / `WeldapCredentialProvider.dll` and compare to
+`HKLM\SOFTWARE\WELDAP\{ServiceHash,AdminHash,ProviderHash}`. See `docs/RELEASING.md` for the release flow.
 
 ## 7. Troubleshooting
 
