@@ -8,7 +8,7 @@
 # The runtime image is AlmaLinux 9 micro with every executable removed: glibc and config, the server binary, and
 # nothing an intruder could run (no shell, coreutils, package manager or openssl).
 
-FROM almalinux:9@sha256:245f8aab832fe800aa42bdab5fad75ebbd8e0b4c9f24820a83c638b177857ae2 AS toolchain
+FROM almalinux:10@sha256:5a4b41a427c9717be8f4ac2a32aa22efbae5f9124fbcb79a6765394f312acfe8 AS toolchain
 RUN dnf -y install rust cargo gcc && dnf clean all
 
 FROM toolchain AS build
@@ -31,7 +31,7 @@ ENV LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata CARGO_TARGET
 WORKDIR /src
 
 # Device CA: openssl + the weldap-ca script. Never on the serving host's network (compose runs it with none).
-FROM almalinux:9-minimal@sha256:6a245486786d3e92c8b4f97a98e2acd5ffa4d78ef1d5fefbd91a64a9965bcbf0 AS ca
+FROM almalinux:10-minimal@sha256:dfc4e05e3965fc933f9e256eb2e63a7a7a1eb1a53fa951c39841f2069ff38530 AS ca
 RUN microdnf -y install openssl && microdnf clean all \
     && echo 'weldap:x:10001:10001:WELDAP CA:/nonexistent:/sbin/nologin' >>/etc/passwd \
     && echo 'weldap:x:10001:' >>/etc/group
