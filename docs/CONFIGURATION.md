@@ -88,6 +88,21 @@ it. Per-account secrets live in the `Secret` subkey, readable by SYSTEM only.
 **Built-in exclusions** are always refused regardless of `ExcludedAccounts`: `administrator`, `guest`,
 `defaultaccount`, `wdagutilityaccount`.
 
+**The tile picture** is not a setting: it is compiled into the credential-provider DLL (so the anti-tamper pin
+covers it too) and chosen at build time. Give the build any square PNG, JPEG, GIF or BMP of 64–1024 px; it is
+normalised to a 192×192 24-bit bitmap (no alpha — transparency is flattened onto black) and LogonUI shows it
+cropped to a circle, so keep the subject inside the inscribed circle.
+
+```sh
+WELDAP_TILE_IMAGE=~/branding/logo.png vm/build-in-vm.sh     # from the Mac: both providers and both MSIs
+```
+```powershell
+client\Weldap.CredentialProvider\build.ps1 -TileImage C:\branding\logo.png   # or in the build VM directly
+```
+
+Unset, the build uses `client/Weldap.CredentialProvider/art/tile.bmp` (a collider event display), which
+`art/make-tile.py` regenerates; the label beside the picture is the run-time `TileLabel` above.
+
 **Changing a setting after install.** The three `*Hash` values and the server identity come from the MSI; the
 local-account policies (`AdoptPreexisting`, `LockdownEnforce`, `IdleDisableDays`) are plain DWORDs you can set
 with an elevated `reg.exe` (or, for lockdown, `weldapadm lockdown arm|disarm`):

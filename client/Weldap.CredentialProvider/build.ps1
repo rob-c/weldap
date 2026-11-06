@@ -7,17 +7,53 @@
     each build inside VsDevCmd.bat for the target architecture, then checks the result with
     dumpbin: exports, ASLR / high-entropy VA / NX / CFG flags and no dynamic VC++ runtime.
 
+    -TileImage (or $env:WELDAP_TILE_IMAGE) swaps the picture on the logon tile: any square PNG, JPEG, GIF or
+    BMP, 64-1024 px. It is normalised to what LogonUI gets from the DLL -- a 192x192 24-bit BMP (no alpha:
+    transparency is flattened onto black) -- and compiled in. Default: art\tile.bmp (art\make-tile.py).
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File build.ps1
     powershell -ExecutionPolicy Bypass -File build.ps1 -Platform ARM64
+    powershell -ExecutionPolicy Bypass -File build.ps1 -TileImage C:\branding\logo.png
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('x64', 'ARM64')]
-    [string[]]$Platform = @('x64', 'ARM64')
+    [string[]]$Platform = @('x64', 'ARM64'),
+    [string]$TileImage = $env:WELDAP_TILE_IMAGE
 )
 $ErrorActionPreference = 'Stop'
 $project = Join-Path $PSScriptRoot 'WeldapCredentialProvider.vcxproj'
+
+# The tile picture: validated and normalised before the build, so a bad image fails here with a clear message
+# rather than as a resource-compiler error (or a blank tile).
+$tileSize = 192
+$tileSrc = if ($TileImage) { (Resolve-Path -LiteralPath $TileImage).Path } else { Join-Path $PSScriptRoot 'art\tile.bmp' }
+$tileBmp = Join-Path $PSScriptRoot 'obj\tile.bmp'
+Add-Type -AssemblyName System.Drawing
+$stream = New-Object IO.MemoryStream(, [IO.File]::ReadAllBytes($tileSrc))
+try {
+    try { $img = [Drawing.Image]::FromStream($stream) } catch { throw "tile image is not a PNG, JPEG, GIF or BMP: $tileSrc" }
+    if ($img.Width -ne $img.Height) { throw "tile image must be square (got $($img.Width)x$($img.Height)): $tileSrc" }
+    if ($img.Width -lt 64 -or $img.Width -gt 1024) { throw "tile image must be 64-1024 px (got $($img.Width)): $tileSrc" }
+    $bmp = New-Object Drawing.Bitmap($tileSize, $tileSize, [Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $g = [Drawing.Graphics]::FromImage($bmp)
+    $g.Clear([Drawing.Color]::Black)
+    $g.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $wrap = New-Object Drawing.Imaging.ImageAttributes
+    $wrap.SetWrapMode([Drawing.Drawing2D.WrapMode]::TileFlipXY)   # no dark fringe from sampling past the edge
+    $g.DrawImage($img, (New-Object Drawing.Rectangle(0, 0, $tileSize, $tileSize)), 0, 0, $img.Width, $img.Height,
+        [Drawing.GraphicsUnit]::Pixel, $wrap)
+    $g.Dispose()
+    New-Item -ItemType Directory -Force -Path (Split-Path $tileBmp) | Out-Null
+    $bmp.Save($tileBmp, [Drawing.Imaging.ImageFormat]::Bmp)
+    $bmp.Dispose()
+    $img.Dispose()
+} finally {
+    $stream.Dispose()
+}
+Write-Host "tile image: $tileSrc -> ${tileSize}x${tileSize} 24-bit BMP"
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path $vswhere)) { throw "vswhere not found: $vswhere" }
@@ -51,7 +87,7 @@ function Invoke-InDevEnv([string]$TargetArch, [string]$CommandLine) {
 foreach ($p in $Platform) {
     $arch = if ($p -eq 'ARM64') { 'arm64' } else { 'amd64' }
     Write-Host "=== Building Release|$p ==="
-    Invoke-InDevEnv $arch "msbuild `"$project`" /nologo /m /t:Rebuild /p:Configuration=Release /p:Platform=$p /v:minimal"
+    Invoke-InDevEnv $arch "msbuild `"$project`" /nologo /m /t:Rebuild /p:Configuration=Release /p:Platform=$p `"/p:WeldapTileBmp=$tileBmp`" /v:minimal"
 
     $dll = Join-Path $PSScriptRoot "out\$p\WeldapCredentialProvider.dll"
     if (-not (Test-Path $dll)) { throw "missing output: $dll" }

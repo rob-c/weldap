@@ -1,6 +1,6 @@
 WeldapCredentialProvider contains code derived from the Microsoft Windows-classic-samples
 CredentialProvider V2 sample (https://github.com/microsoft/Windows-classic-samples,
-Samples/CredentialProvider/cpp), and its tile bitmap, under the following licence:
+Samples/CredentialProvider/cpp), under the following licence:
 
 The MIT License (MIT)
 

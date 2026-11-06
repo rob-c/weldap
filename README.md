@@ -24,8 +24,9 @@ local account. There are exactly two parties on the network:
 - **server** (`server/`): a Rust service in an AlmaLinux 9 container, the only thing clients reach and the only
   LDAP client of the directory. It opens the sealed password in locked memory, binds as the user, and answers.
 
-New to the code? Start with `docs/ARCHITECTURE.md`. Deploying or operating a device? See
-`docs/CONFIGURATION.md` (install, every setting, the account model, `weldapadm`, signing). See also
+New to the code? Start with `docs/ARCHITECTURE.md`. Standing WELDAP up against your own directory? Follow
+`DEPLOY.md` (directory requirements, server setup, smoke test, device rollout, operations). Deploying or operating
+a device? See `docs/CONFIGURATION.md` (install, every setting, the account model, `weldapadm`, signing). See also
 `client/Weldap.Shared/PROTOCOL.md`, `server/README.md` and `docs/REQUIREMENTS.md`. It targets 389
 Directory Server (and any LDAP directory that accepts simple binds over LDAPS).
 
@@ -94,6 +95,7 @@ tests/quality.sh <gate>...          # run named gates only (CI does this): paran
                                     #   shellcheck client server deny imports; --fast for the quick three
 ./build.sh                          # C# unit tests, then publish the service for win-x64 and win-arm64 to out/
 vm/build-in-vm.sh                   # in vm1: credential provider x64 + ARM64 and both MSIs -> out/msi
+                                    #   (WELDAP_TILE_IMAGE=<square png/jpg/bmp> swaps the logon tile's picture)
 docker build -t weldap-server server/ && docker build --target test -t weldap-server:test server/
 tests/server/run.sh                 # server in Docker: device trust, sealed auth, replay, throttling, revocation,
                                     #   network surface, TLS, process hardening, no secret in logs or memory

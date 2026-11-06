@@ -1,9 +1,9 @@
-// WELDAP credential provider resources. tileimage.bmp is from the Microsoft
-// Windows-classic-samples CredentialProvider sample (MIT License, see THIRD-PARTY-NOTICES.txt).
+// WELDAP credential provider resources. weldap-tile.bmp is not in the sources: the project stages the chosen tile
+// picture (WeldapTileBmp: build.ps1 -TileImage, default art\tile.bmp) into $(IntDir), on the resource include path.
 #include <winres.h>
 #include "resource.h"
 
-IDB_TILE_IMAGE      BITMAP      "tileimage.bmp"
+IDB_TILE_IMAGE      BITMAP      "weldap-tile.bmp"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 0,1,0,0

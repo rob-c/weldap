@@ -16,6 +16,14 @@ trap 'rm -rf "$work"' EXIT
 zip -qr "$work/src.zip" client installer tests/cp-harness vm/provision/build-msi.ps1 global.json Directory.Build.props \
     out/service-win-x64 out/service-win-arm64 out/admin-win-x64 out/admin-win-arm64 \
     -x '*/bin/*' '*/obj/*' 'client/Weldap.CredentialProvider/out/*' '*.DS_Store'
+# WELDAP_TILE_IMAGE (a host path) swaps the picture on the logon tile: shipped beside the sources and handed to the
+# provider build (build.ps1 -TileImage checks and normalises it). Unset = the default, art/tile.bmp.
+if [[ -n "${WELDAP_TILE_IMAGE:-}" ]]; then
+    [[ -f "$WELDAP_TILE_IMAGE" ]] || { echo "WELDAP_TILE_IMAGE: no such file: $WELDAP_TILE_IMAGE" >&2; exit 1; }
+    mkdir -p "$work/branding"
+    cp "$WELDAP_TILE_IMAGE" "$work/branding/tile-image"
+    (cd "$work" && zip -qr src.zip branding)
+fi
 
 vm/vmctl.sh ps "$VM" "Remove-Item -Recurse -Force '$G' -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path '$G' | Out-Null" >/dev/null
@@ -31,6 +39,7 @@ for v in WELDAP_SIGN_THUMBPRINT WELDAP_SIGN_PFX WELDAP_SIGN_PFX_PASSWORD WELDAP_
         sign_prelude+="\$env:$v='$val'; "
     fi
 done
+[[ -z "${WELDAP_TILE_IMAGE:-}" ]] || sign_prelude+="\$env:WELDAP_TILE_IMAGE='$G\\branding\\tile-image'; "
 GUEST_TIMEOUT=2400 vm/vmctl.sh ps "$VM" "$sign_prelude& '$G\\vm\\provision\\build-msi.ps1' -Root '$G'"
 
 mkdir -p out/msi out/provider-x64 out/provider-ARM64
