@@ -31,7 +31,9 @@ This document is the authoritative requirements list. The wire formats are in
 
 - Let Windows, its logs, LSASS, the SAM, disk, the registry or the network ever hold the user's directory
   password in a recoverable form.
-- Touch any local account that WELDAP did not create (nothing outside the `WELDAP-Managed` group).
+- Touch any local account outside the `WELDAP-Managed` group, except to adopt one with its user's consent
+  (`AdoptPreexisting`) or to disable one the directory does not know (armed lockdown); never a protected account
+  (force-local, or a Windows built-in).
 - Put directory credentials, DNs, group names or LDAP code on the device.
 - Open any listening network port on the device, or expose anything to the network beyond the server's one TLS
   port.
@@ -49,11 +51,11 @@ logs on with. A definite "no" (bad password, not a member, excluded, an unexpect
 error) denies the sign-in with a short message. The server's answer always wins when there is one.
 
 **Offline.** When there is *no answer* (server unreachable, TLS refused because the device is unregistered or
-revoked, connect timeout, or the server cannot reach the directory), the service compares the offline verifier
-the credential provider computed against the one stored at the last successful online sign-in, in constant
-time, and on a match returns the local password. Offline sign-in is allowed only for a managed, enabled account
-before its expiry date, and stops after `OfflineMaxFailures` consecutive wrong offline attempts until the next
-online sign-in. Excluded and non-managed names are refused offline too.
+revoked, connect timeout, the 9 s round trip running out, or the server cannot reach the directory), the service
+compares the offline verifier the credential provider computed against the one stored at the last successful
+online sign-in, in constant time, and on a match returns the local password. Offline sign-in is allowed only for
+a managed, enabled account before its expiry date, and stops after `OfflineMaxFailures` consecutive wrong offline
+attempts until the next online sign-in. Excluded and non-managed names are refused offline too.
 
 ## Functional requirements
 
@@ -65,14 +67,14 @@ online sign-in. Excluded and non-managed names are refused offline too.
 | FR-4 | Create a local account named exactly the UUN when it does not exist; add it to `WELDAP-Managed` and `Users`. |
 | FR-5 | On every successful authentication: enable the account, set its expiry to today + `MaxOfflineDays`, store the offline verifier, and keep its random local password (generated once; never expires, user cannot change). The local password is never the user's password. |
 | FR-6 | Add the account to Administrators when in the admins group; remove it when not. Never change Administrators for accounts outside `WELDAP-Managed`. |
-| FR-7 | Refuse the sign-in if the UUN matches an existing local account not in `WELDAP-Managed` (no takeover of existing accounts). |
-| FR-8 | Refuse sign-ins for excluded names (Administrator, Guest, DefaultAccount, WDAGUtilityAccount, the break-glass account, and anything in `ExcludedAccounts`). |
+| FR-7 | If the UUN matches an existing local account not in `WELDAP-Managed`, take it over only with the user's consent: after the server confirms the password and the `user` flag, reply "adopt" with a warning, and adopt (fresh random local password) only on a resubmit with the consent flag. With `AdoptPreexisting` off, refuse. Never adopt a protected account. |
+| FR-8 | Refuse sign-ins for excluded names (Administrator, Guest, DefaultAccount, WDAGUtilityAccount, the break-glass account, and anything in `ExcludedAccounts`) and protected accounts: force-local, managed or not, and the Windows built-ins recognised by SID (RIDs 500/501/503/504), so renamed or localised ones too. |
 | FR-9 | Fail closed online: an invalid result, not-authorised, an unexpected directory result or a service crash = deny with a short tile message. No answer at all (unreachable, TLS failure, connect timeout) = the offline path (FR-15), never an online allow. |
 | FR-10 | Leave the stock Windows password tile available for excluded and break-glass accounts. |
 | FR-11 | Disable the "change password" scenario for the WELDAP tile. |
-| FR-12 | Every hour and at service start, reconcile managed accounts with the server: ask only about the accounts this device manages; the server answers two flags per UUN. Disable accounts no longer users; match Administrators to the admin flag. A failed or partial read changes nothing. Never delete profiles. |
+| FR-12 | Every hour and at service start, reconcile local accounts with the server: ask about every local account name that can be a UUN, managed or not (excluded and protected ones aside), at most 100 per request; the server answers two flags per UUN. Disable managed accounts no longer users; match Administrators to the admin flag; never disable or demote the last enabled local administrator. A failed or partial read changes nothing. Never delete profiles. |
 | FR-13 | Write a Windows Application-log event for every allow, deny and account change: UUN, result, reason. Never the password. |
-| FR-14 | Be installable, upgradable and removable silently by MSI; removal leaves local accounts and profiles in place. |
+| FR-14 | Be installable, upgradable and removable silently by MSI; an upgrade or repair keeps the settings and per-device state; removal leaves local accounts and profiles in place. |
 | FR-15 | Offline sign-in (see Login flow): verifier comparison for a managed, enabled, unexpired account, subject to `OfflineMaxFailures`; excluded and non-managed names still refused. |
 | FR-16 | Build and ship x64 and ARM64: the credential provider DLL natively for each (LogonUI loads only native DLLs), the service per runtime, one MSI per architecture. |
 
@@ -112,9 +114,9 @@ attacker: memory, logs, the pipe, disk, the network.
 | SR-2 | The client trusts the server by a pinned SHA-256 of its TLS public key (`ServerPins`), not by a CA or hostname; any mismatch = no answer (offline). The server verifies the directory's certificate against its configured CA. |
 | SR-3 | Validate the UUN with `^[a-z0-9]{1,20}$` before it is used anywhere. Reject empty passwords (an empty-password bind is an anonymous bind). |
 | SR-4 | The credential provider contains no network, LDAP or account code: only UI, the pipe client, the logon serialization, and the sealing of the password (CNG only). |
-| SR-5 | The pipe accepts local SYSTEM clients only (remote rejected, NETWORK denied), one request per connection, size-limited, in a strict fixed binary schema; anything malformed is dropped with no reply. The credential provider checks the pipe server is SYSTEM before sending; the service owns the pipe name for its whole lifetime (one instance). |
+| SR-5 | The pipe accepts local SYSTEM clients only (remote rejected, NETWORK denied), one request per connection, size-limited, in a strict fixed binary schema; anything malformed is dropped with no reply. The credential provider checks the pipe server is SYSTEM before sending; the service owns the pipe name for its whole lifetime (8 instances, only SYSTEM can add one). |
 | SR-6 | Passwords and verifiers live only in memory for one request; buffers are zeroed after use (`SecureZeroMemory` in C++, pinned/cleared `byte[]`/`char[]` in C#). No password in logs, events, crash dumps or the registry. |
-| SR-7 | Only accounts in `WELDAP-Managed` are ever created, changed, enabled or disabled. |
+| SR-7 | Only accounts in `WELDAP-Managed` are ever created, changed, enabled or disabled, with two exceptions: adoption (FR-7) and armed lockdown, which only disables. The service never touches protected accounts (force-local, Windows built-ins by SID). |
 | SR-8 | Rate limit: after 5 failed sign-ins for one UUN within 5 minutes, deny that UUN locally for 5 minutes without contacting the server (protects the directory account from lockout). The server enforces the same independently. |
 | SR-9 | Per-account secrets on the device (local password, offline verifier) are machine-scope DPAPI blobs in `HKLM\SOFTWARE\WELDAP\Secret`, a key with a protected DACL for SYSTEM only; the service refuses to start if anyone else can read it. The device holds no directory credential. |
 | SR-10 | DLL and service binaries ship with no debug symbols; the service verifies the registered credential-provider DLL against a build-time pinned hash and checks its config key is writable only by SYSTEM/Administrators, refusing to run otherwise. |
@@ -134,18 +136,19 @@ attacker: memory, logs, the pipe, disk, the network.
 ## Configuration
 
 All device settings live under `HKLM\SOFTWARE\WELDAP`, writable only by SYSTEM and Administrators, written by the
-MSI.
+MSI (and remembered from there on upgrade and repair). A number is a DWORD or a decimal string; a list is a
+multi-string or a string separated by `,` or `;`. The MSI writes both as strings.
 
 | Value | Type | Meaning |
 | --- | --- | --- |
 | `ServerHost` | string | address of the WELDAP server |
-| `ServerPort` | DWORD | server port (default 636) |
-| `ServerPins` | multi-string | base64 SHA-256 of the server's TLS public key — the only server trust (required) |
-| `ServerKey` | string | base64 P-256 public key the credential provider seals to |
-| `ServerKeyId` | string | key id naming `ServerKey` (e.g. `k1`) |
-| `ExcludedAccounts` | multi-string | extra names the tile refuses (besides the built-ins and break-glass) |
-| `MaxOfflineDays` | DWORD | account expiry set at each online sign-in (default 180; 0 disables offline sign-in) |
-| `OfflineMaxFailures` | DWORD | consecutive wrong offline attempts before offline sign-in stops (default 10) |
+| `ServerPort` | number | server port (default 636) |
+| `ServerPins` | list | base64 SHA-256 of the server's TLS public key — the only server trust (required) |
+| `ServerKey` | string | base64 P-256 public key the credential provider seals to (65-byte uncompressed point; checked at service start) |
+| `ServerKeyId` | string | key id naming `ServerKey` (e.g. `k1`; 1–32 of `[a-z0-9-]`, checked at service start) |
+| `ExcludedAccounts` | list | extra names the tile refuses (besides the built-ins and break-glass) |
+| `MaxOfflineDays` | number | account expiry set at each online sign-in (default 180, 0–3650; 0 disables offline sign-in) |
+| `OfflineMaxFailures` | number | consecutive wrong offline attempts before offline sign-in stops (default 10, 1–100) |
 | `TileLabel` | string | the tile's label (default "WELDAP sign-in") |
 | `ProviderHash` | string | SHA-256 the MSI pins for the credential-provider DLL (anti-tamper; SR-10) |
 

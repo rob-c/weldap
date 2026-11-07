@@ -16,6 +16,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $dest = 'C:\Program Files\WELDAP'
 $keyPath = 'HKLM:\SOFTWARE\WELDAP'
+if (-not $Uninstall) {
+    # Checked before anything is removed, so a bad command line leaves the current install as it was.
+    if (-not $ServerKey) { throw '-ServerKey (the server public password key) is required' }
+    if (-not $ServerPin) { throw '-ServerPin (SHA-256 of the server TLS public key, base64) is required' }
+}
 
 if (Get-Service Weldap -ErrorAction SilentlyContinue) {
     Stop-Service Weldap -Force -ErrorAction SilentlyContinue
@@ -40,8 +45,6 @@ $acl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule(
 $acl.SetOwner((New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')))
 Set-Acl -Path $keyPath -AclObject $acl
 
-if (-not $ServerKey) { throw '-ServerKey (the server public password key) is required' }
-if (-not $ServerPin) { throw '-ServerPin (SHA-256 of the server TLS public key, base64) is required' }
 # Values from earlier designs: gone from the device for good.
 foreach ($old in 'LdapHost', 'LdapPort', 'UserDnTemplate', 'PeopleBase', 'UsersGroupDn', 'AdminsGroupDn', 'ServiceBindDn',
                  'ServiceBindSecret', 'HideDefaultTile', 'GatewayHost', 'GatewayPort', 'DeviceCaIssuer', 'GatewayPasswordKey',
@@ -72,6 +75,7 @@ $src.MessageResourceFile = "$dest\System.Diagnostics.EventLog.Messages.dll"
 sc.exe create Weldap binPath= "`"$dest\WeldapService.exe`"" start= auto obj= LocalSystem DisplayName= "WELDAP Service" | Out-Null
 sc.exe description Weldap "Relays sealed sign-ins to the WELDAP server and keeps managed local accounts in step." | Out-Null
 sc.exe failure Weldap reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+sc.exe failureflag Weldap 1 | Out-Null   # also restart on a non-crash failure (the service exits non-zero on a fault)
 Start-Service Weldap
 Start-Sleep -Seconds 3
 Get-Service Weldap | Format-Table -AutoSize Name, Status | Out-String

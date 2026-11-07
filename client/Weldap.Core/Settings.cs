@@ -30,8 +30,16 @@ public sealed record LoginSettings
     /// <summary>Friendly name of this device's registered certificate in LocalMachine\My (SR-14), set by
     /// register-device.ps1; the newest currently valid one with its private key is used.</summary>
     public const string DeviceCertificateName = "WELDAP device";
+    /// <summary>
+    /// Time budget, outermost first: the credential provider gives up after 15 s (WELDAP_CLIENT_DEADLINE_MS, from
+    /// before it opens the pipe); the service serves one pipe client within 14 s (PipeServer); one round trip to
+    /// the WELDAP server -- connect, TLS handshake, request and reply -- is cut off after
+    /// <see cref="ServerBudgetSeconds"/>, leaving the rest for the local account work. So the service always
+    /// answers before the tile gives up, and a slow server becomes the offline path, not "service unavailable".
+    /// </summary>
+    public const int ServerBudgetSeconds = 9;
+    /// <summary>The TCP connect to one of the server's addresses, within <see cref="ServerBudgetSeconds"/>.</summary>
     public const int ConnectTimeoutSeconds = 3;
-    public const int TimeoutSeconds = 10;
     public const int CleanupIntervalMinutes = 60;
 
     /// <summary>Built-in names the WELDAP tile always refuses, whatever ExcludedAccounts says.</summary>
@@ -79,7 +87,25 @@ public static class SettingsText
             && Convert.ToBase64String(digest[..32]) == pin;
     }
 
-    /// <summary>Throws InvalidOperationException (the service then refuses to start) on anything unusable.</summary>
+    /// <summary>
+    /// The server's public password key as the credential provider uses it: base64 of an uncompressed P-256 point
+    /// (65 bytes, 0x04 first). Checked by the service at start so a bad MSI value fails loudly there, not at the tile.
+    /// </summary>
+    public static bool IsServerKey(string key)
+    {
+        Span<byte> point = stackalloc byte[66];
+        return key.Length == 88 && Convert.TryFromBase64String(key, point, out var n) && n == Protocol.EncBytes && point[0] == 0x04;
+    }
+
+    /// <summary>A key id as the pipe protocol carries it: 1..32 of [a-z0-9-].</summary>
+    public static bool IsKeyId(string kid) =>
+        kid.Length is >= 1 and <= Protocol.MaxKidChars && kid.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-');
+
+    /// <summary>
+    /// Throws InvalidOperationException (the service then refuses to start) on anything unusable, and returns the
+    /// settings with the day and failure counts clamped to their documented ranges (MaxOfflineDays and
+    /// IdleDisableDays 0..3650, OfflineMaxFailures 1..100), so no later date arithmetic can overflow.
+    /// </summary>
     public static LoginSettings Validate(LoginSettings s)
     {
         if (s.ServerPort is < 1 or > 65535) throw new InvalidOperationException("ServerPort out of range");
@@ -87,6 +113,11 @@ public static class SettingsText
             throw new InvalidOperationException("ServerHost is not a host name or address");
         if (s.ServerPins.Count == 0) throw new InvalidOperationException("ServerPins not set");
         if (!s.ServerPins.All(IsPin)) throw new InvalidOperationException("ServerPins: not base64 SHA-256 digests");
-        return s;
+        return s with
+        {
+            MaxOfflineDays = Math.Clamp(s.MaxOfflineDays, 0, 3650),
+            IdleDisableDays = Math.Clamp(s.IdleDisableDays, 0, 3650),
+            OfflineMaxFailures = Math.Clamp(s.OfflineMaxFailures, 1, 100),
+        };
     }
 }

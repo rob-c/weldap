@@ -1,8 +1,9 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
   <!--
-    Build in the VM (needs Windows), one MSI per architecture:
-      dotnet build installer -c Release -p:InstallerPlatform=x64   -p:ServiceDir=..\out\service-win-x64   -p:ProviderDir=..\out\provider-x64
-      dotnet build installer -c Release -p:InstallerPlatform=arm64 -p:ServiceDir=..\out\service-win-arm64 -p:ProviderDir=..\out\provider-arm64
+    Built by vm/provision/build-msi.ps1 (in the build VM: needs Windows), one MSI per architecture, which also
+    passes the three anti-tamper hashes and, optionally, -p:ProductVersion. By hand:
+      dotnet build installer -c Release -p:InstallerPlatform=arm64 -p:ServiceDir=..\out\service-win-arm64
+        -p:ProviderDir=..\out\provider-arm64 -p:AdminDir=..\out\admin-win-arm64 -p:ProviderHash=<sha256> ...
   -->
   <PropertyGroup>
     <OutputName>Weldap-$(InstallerPlatform)</OutputName>
@@ -12,8 +13,14 @@
     <ProviderHash Condition="'$(ProviderHash)' == ''">0000000000000000000000000000000000000000000000000000000000000000</ProviderHash>
     <ServiceHash Condition="'$(ServiceHash)' == ''">0000000000000000000000000000000000000000000000000000000000000000</ServiceHash>
     <AdminHash Condition="'$(AdminHash)' == ''">0000000000000000000000000000000000000000000000000000000000000000</AdminHash>
-    <DefineConstants>ServiceDir=$(ServiceDir);ProviderDir=$(ProviderDir);AdminDir=$(AdminDir);ProductVersion=$(ProductVersion);ProviderClsid=$(ProviderClsid);ProviderHash=$(ProviderHash);ServiceHash=$(ServiceHash);AdminHash=$(AdminHash)</DefineConstants>
+    <!-- The installed provider DLL is named after its hash (Package.wxs: an upgrade never collides with the DLL
+         LogonUI has loaded). -->
+    <ProviderTag>$(ProviderHash.Substring(0, 12).ToLowerInvariant())</ProviderTag>
+    <DefineConstants>ServiceDir=$(ServiceDir);ProviderDir=$(ProviderDir);AdminDir=$(AdminDir);ProductVersion=$(ProductVersion);ProviderClsid=$(ProviderClsid);ProviderHash=$(ProviderHash);ProviderTag=$(ProviderTag);ServiceHash=$(ServiceHash);AdminHash=$(AdminHash)</DefineConstants>
     <SuppressValidation>false</SuppressValidation>
+    <!-- ICE61 warns that a same-version rebuild replaces the installed copy: that is deliberate (Package.wxs
+         MajorUpgrade AllowSameVersionUpgrades), so a rebuilt MSI upgrades in place instead of installing beside it. -->
+    <SuppressIces>ICE61</SuppressIces>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />

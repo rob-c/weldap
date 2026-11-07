@@ -9,7 +9,10 @@
 #define WELDAP_MAX_UUN_CHARS       20u
 #define WELDAP_MAX_LOCAL_PASSWORD_CHARS 64u   // the account's random local password in the reply
 #define WELDAP_MAX_REPLY_MESSAGE_CHARS 200u   // UTF-16 code units
-#define WELDAP_CLIENT_DEADLINE_MS  15000u     // connect + write + read, end to end (server + 3 s connect)
+// The tile's end-to-end budget, counted from before it opens the pipe (so time spent waiting for a busy or a
+// starting service counts too). The service serves a client within 14 s, and its server round trip within 9 s
+// (LoginSettings.ServerBudgetSeconds), so it always answers first.
+#define WELDAP_CLIENT_DEADLINE_MS  15000u
 
 #define WELDAP_SCENARIO_LOGON      "logon"    // in the sealed AAD
 #define WELDAP_SCENARIO_UNLOCK     "unlock"
@@ -18,6 +21,7 @@
 // the server never sees them -- they steer the client/service pipe exchange only.
 #define WELDAP_FLAG_SCENARIO_UNLOCK 0x01
 #define WELDAP_FLAG_CONSENT         0x02
+#define WELDAP_FLAGS_MASK           0x03
 
 // Reply result byte.
 #define WELDAP_RESULT_OK           0

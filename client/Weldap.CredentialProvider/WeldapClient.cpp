@@ -1,5 +1,5 @@
 // WELDAP: pipe client for the credential provider. See WeldapClient.h and
-// src/Weldap.Shared/PROTOCOL.md (the contract this file implements).
+// client/Weldap.Shared/PROTOCOL.md (the contract this file implements).
 
 #include "WeldapClient.h"
 #include <aclapi.h>
@@ -73,7 +73,7 @@ HRESULT WeldapNormalizeUun(_In_opt_ PCWSTR pwzIn, _Out_writes_(cchOut) PWSTR pwz
 // Binary codec (PROTOCOL.md): little-endian, fixed field order, nothing optional.
 // ---------------------------------------------------------------------------------------------
 
-size_t WeldapEncodeRequest(bool fUnlock, _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
+size_t WeldapEncodeRequest(BYTE bFlags, _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
                            _Out_writes_bytes_(cbOut) BYTE *pbOut, size_t cbOut)
 {
     if (pwzUun == nullptr || pSealed == nullptr || pbOut == nullptr)
@@ -94,7 +94,7 @@ size_t WeldapEncodeRequest(bool fUnlock, _In_ PCWSTR pwzUun, _In_ const WELDAP_S
         char c = pSealed->szKid[i];
         fKidOk = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
     }
-    if (cchUun == 0 || cchUun > WELDAP_MAX_UUN_CHARS || !fKidOk || pSealed->rgbEnc[0] != 0x04 ||
+    if (cchUun == 0 || cchUun > WELDAP_MAX_UUN_CHARS || !fKidOk || (bFlags & ~WELDAP_FLAGS_MASK) != 0 || pSealed->rgbEnc[0] != 0x04 ||
         cbCt <= WELDAP_HPKE_TAG_BYTES || cbCt > sizeof(pSealed->rgbCt) || pSealed->ts == 0 ||
         pSealed->ts > 0x7FFFFFFFFFFFFFFFULL)
     {
@@ -109,7 +109,7 @@ size_t WeldapEncodeRequest(bool fUnlock, _In_ PCWSTR pwzUun, _In_ const WELDAP_S
     }
     BYTE *p = pbOut;
     *p++ = WELDAP_PROTOCOL_VERSION;
-    *p++ = fUnlock ? 1 : 0;
+    *p++ = bFlags;
     *p++ = static_cast<BYTE>(cchUun);
     for (size_t i = 0; i < cchUun; i++)
     {
@@ -136,13 +136,14 @@ size_t WeldapEncodeRequest(bool fUnlock, _In_ PCWSTR pwzUun, _In_ const WELDAP_S
 }
 
 // Reply: version(1)=3 result(1) mode(1) msgLen(1) message(UTF-16LE, msgLen units) pwLen(1) password(ASCII).
-// Exactly that many bytes; ok needs a password of 1..64 printable ASCII, deny/error must have none and mode 0.
+// Exactly that many bytes; ok needs a password of 1..64 printable ASCII; deny, error and adopt must have none and
+// mode 0.
 bool WeldapParseReply(_In_reads_bytes_(cb) const BYTE *pb, size_t cb, _Out_ WELDAP_REPLY *pReply)
 {
     ZeroMemory(pReply, sizeof(*pReply));
     pReply->result = WELDAP_RESULT_VALUE_ERROR;
     if (pb == nullptr || cb < 5 || cb > WELDAP_MAX_MESSAGE_BYTES || pb[0] != WELDAP_PROTOCOL_VERSION ||
-        pb[1] > WELDAP_RESULT_ERROR || pb[2] > 1 || pb[3] > WELDAP_MAX_REPLY_MESSAGE_CHARS)
+        pb[1] > WELDAP_RESULT_ADOPT || pb[2] > 1 || pb[3] > WELDAP_MAX_REPLY_MESSAGE_CHARS)
     {
         return false;
     }
@@ -379,7 +380,7 @@ WELDAP_CLIENT_STATUS Exchange(HANDLE hPipe, HANDLE hEvent, BYTE (&rgbFrame)[4 + 
 }
 } // namespace
 
-WELDAP_CLIENT_STATUS WeldapAuthenticateEx(_In_ PCWSTR pwzPipeName, DWORD dwDeadlineMs, bool fUnlock,
+WELDAP_CLIENT_STATUS WeldapAuthenticateEx(_In_ PCWSTR pwzPipeName, DWORD dwDeadlineMs, BYTE bFlags,
                                     _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
                                     _Out_ WELDAP_REPLY *pReply)
 {
@@ -390,7 +391,7 @@ WELDAP_CLIENT_STATUS WeldapAuthenticateEx(_In_ PCWSTR pwzPipeName, DWORD dwDeadl
     // Frame = 4-byte little-endian length + the binary request (sealed password and offline verifier), then
     // reused for the reply (with the local password). Zeroed on every path.
     BYTE rgbFrame[4 + WELDAP_MAX_MESSAGE_BYTES];
-    size_t cbBody = WeldapEncodeRequest(fUnlock, pwzUun, pSealed, rgbFrame + 4, WELDAP_MAX_MESSAGE_BYTES);
+    size_t cbBody = WeldapEncodeRequest(bFlags, pwzUun, pSealed, rgbFrame + 4, WELDAP_MAX_MESSAGE_BYTES);
     if (cbBody == 0)
     {
         SecureZeroMemory(rgbFrame, sizeof(rgbFrame));
@@ -434,8 +435,8 @@ WELDAP_CLIENT_STATUS WeldapAuthenticateEx(_In_ PCWSTR pwzPipeName, DWORD dwDeadl
     return status;
 }
 
-WELDAP_CLIENT_STATUS WeldapAuthenticate(bool fUnlock, _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
+WELDAP_CLIENT_STATUS WeldapAuthenticate(BYTE bFlags, _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
                                   _Out_ WELDAP_REPLY *pReply)
 {
-    return WeldapAuthenticateEx(WELDAP_PIPE_NAME, WELDAP_CLIENT_DEADLINE_MS, fUnlock, pwzUun, pSealed, pReply);
+    return WeldapAuthenticateEx(WELDAP_PIPE_NAME, WELDAP_CLIENT_DEADLINE_MS, bFlags, pwzUun, pSealed, pReply);
 }

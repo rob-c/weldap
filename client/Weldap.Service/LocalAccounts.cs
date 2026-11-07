@@ -7,7 +7,10 @@ namespace Weldap.Service;
 
 /// <summary>
 /// Local SAM accounts through netapi32. SR-7: every change re-checks that the account is in the
-/// managed group first, so nothing outside WELDAP-Managed is ever modified. Group names come from
+/// managed group first, so nothing outside WELDAP-Managed is ever modified -- the only exceptions are
+/// <see cref="Adopt"/> and the armed-lockdown <see cref="DisableUnmanaged"/>, and both refuse protected accounts
+/// (force-local, and the Windows built-ins, recognised by SID so a renamed or localised one counts too). Names are
+/// handed to Weldap.Core lower case (SAM is case-insensitive; a UUN is lower case). Group names come from
 /// well-known SIDs, so this works on non-English Windows.
 /// </summary>
 internal sealed unsafe class LocalAccounts : ILocalAccounts
@@ -60,18 +63,46 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
             var lastLogon = info->usri2_last_logon == 0
                 ? (DateTimeOffset?)null
                 : DateTimeOffset.FromUnixTimeSeconds(info->usri2_last_logon);
+            var accountName = new string(info->usri2_name);
             return new LocalAccount(
-                new string(info->usri2_name),
+                AsciiLower(accountName),
                 IsManaged: groups.Contains(_managedGroup, StringComparer.OrdinalIgnoreCase),
                 Enabled: (info->usri2_flags & UF_ACCOUNTDISABLE) == 0,
                 IsAdmin: groups.Contains(_administrators, StringComparer.OrdinalIgnoreCase),
                 Expires: expires,
                 IsForceLocal: groups.Contains(_forceLocalGroup, StringComparer.OrdinalIgnoreCase),
-                LastLogon: lastLogon);
+                LastLogon: lastLogon,
+                IsBuiltIn: IsBuiltIn(accountName));
         }
         finally
         {
             _ = NetApiBufferFree(buf);
+        }
+    }
+
+    // Only A-Z: SAM matches names case-insensitively but not by Unicode case folding, so "Karen" with a Kelvin sign
+    // (U+212A, which ToLowerInvariant folds to 'k') is a different account from "karen". Left as is, it can never pass
+    // as a directory user's name.
+    private static string AsciiLower(string name) =>
+        string.Create(name.Length, name, static (span, s) =>
+        {
+            for (var i = 0; i < s.Length; i++) span[i] = s[i] is >= 'A' and <= 'Z' ? (char)(s[i] + 32) : s[i];
+        });
+
+    // Administrator (500), Guest (501), DefaultAccount (503), WDAGUtilityAccount (504): by relative id, whatever
+    // the account is called (CIS hardening renames the Administrator; non-English Windows localises the names).
+    private static readonly string[] BuiltInRids = ["-500", "-501", "-503", "-504"];
+
+    private static bool IsBuiltIn(string name)
+    {
+        try
+        {
+            var sid = (SecurityIdentifier)new NTAccount(Environment.MachineName, name).Translate(typeof(SecurityIdentifier));
+            return BuiltInRids.Any(rid => sid.Value.EndsWith(rid, StringComparison.Ordinal));
+        }
+        catch (IdentityNotMappedException)
+        {
+            return false; // gone since it was listed
         }
     }
 
@@ -100,15 +131,16 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
         IntPtr buf;
         uint rc, read;
         rc = NetUserEnum(null, 0, FILTER_NORMAL_ACCOUNT, out buf, MAX_PREFERRED_LENGTH, out read, out _, null);
-        if (rc != NERR_Success) throw new LocalAccountException($"enumerate users: {rc}", (int)rc);
         try
         {
+            // Checked inside the try: a failing call can still have allocated the buffer (ERROR_MORE_DATA).
+            if (rc != NERR_Success) throw new LocalAccountException($"enumerate users: {rc}", (int)rc);
             var entries = (USER_INFO_0*)buf;
             for (var i = 0; i < read; i++) names.Add(new string(entries[i].usri0_name));
         }
         finally
         {
-            _ = NetApiBufferFree(buf);
+            if (buf != IntPtr.Zero) _ = NetApiBufferFree(buf);
         }
         // Find each by name: an account that vanishes between the enumeration and the lookup is simply dropped.
         return names.Select(Find).OfType<LocalAccount>().ToList();
@@ -117,10 +149,20 @@ internal sealed unsafe class LocalAccounts : ILocalAccounts
     public void Adopt(string name)
     {
         // Bring a pre-existing account under management in place (same SID and profile); the caller then resets
-        // its local password and syncs it. EnsureUser needs the managed membership first.
-        if (Find(name) is null) throw new LocalAccountException($"{name} not found");
+        // its local password (SetPassword, which also applies the never-expires / cannot-change policy) and syncs
+        // it. EnsureUser needs the managed membership first.
+        var account = Find(name) ?? throw new LocalAccountException($"{name} not found");
+        if (account.IsProtected) throw new LocalAccountException($"{name} is protected; refusing to adopt it");
         ChangeMembership(_managedGroup, name, add: true);
         EnsureUser(name);
+    }
+
+    public void DisableUnmanaged(string name)
+    {
+        var account = Find(name) ?? throw new LocalAccountException($"{name} not found");
+        if (account.IsManaged) throw new LocalAccountException($"{name} is managed; not a lockdown candidate");
+        if (account.IsProtected) throw new LocalAccountException($"{name} is protected; refusing to change it");
+        UpdateFlags(name, set: UF_ACCOUNTDISABLE, clear: 0);
     }
 
     public void SetForceLocal(string name, bool forceLocal)

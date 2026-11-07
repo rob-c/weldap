@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Host lint gates
-        run: tests/quality.sh paranoia budget protocol shellcheck
+        run: tests/quality.sh paranoia budget protocol installer shellcheck
 
   client:
     name: "client (C#: build, format, Weldap.Core 100/100)"

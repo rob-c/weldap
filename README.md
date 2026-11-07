@@ -92,7 +92,7 @@ host out, because the agent doesn't go through LogonUI.
 ```sh
 make quality                        # every host gate (wraps tests/quality.sh); non-zero on any failure
 tests/quality.sh <gate>...          # run named gates only (CI does this): paranoia budget protocol
-                                    #   shellcheck client server deny imports; --fast for the quick three
+                                    #   installer shellcheck client server deny imports; --fast for the quick four
 ./build.sh                          # C# unit tests, then publish the service for win-x64 and win-arm64 to out/
 vm/build-in-vm.sh                   # in vm1: credential provider x64 + ARM64 and both MSIs -> out/msi
                                     #   (WELDAP_TILE_IMAGE=<square png/jpg/bmp> swaps the logon tile's picture)
@@ -116,10 +116,10 @@ against the server's HPKE with `weldap-probe open`.
 ## Hardening and assurance
 
 - **Coverage:** `Weldap.Core` (the client's platform-neutral logic) is at 100% of lines and 100% of branches
-  (1467 tests); the Rust server is at 100% of lines and 100% of regions (598 tests). Both gates fail below 100.
+  (1554 tests); the Rust server is at 100% of lines and 100% of regions (598 tests). Both gates fail below 100.
   The client's Windows-only P/Invoke files (SAM, DPAPI, the pipe, the registry ACLs, the socket/TLS open) have no
   host-runnable logic; `client/check.sh` lists them explicitly as covered only by the acceptance suite, so the
-  gap is named rather than hidden. The credential provider's own code is exercised by its 620-check harness.
+  gap is named rather than hidden. The credential provider's own code is exercised by its 631-check harness.
 - **No debug symbols shipped:** the service publishes with no PDB (`build.sh` fails on a stray one), the provider
   DLL emits no PDB, and the Rust binary is stripped. The server runs in an AlmaLinux 9 micro image with every
   executable removed — no shell, coreutils, package manager or openssl.
@@ -129,11 +129,12 @@ against the server's HPKE with `weldap-probe open`.
   capability, is non-dumpable, locks all memory, and `panic = abort`.
 - **Anti-tamper:** at startup the service resolves the credential-provider DLL Windows will load (the registered
   CLSID's `InprocServer32`), requires it to sit in the install folder, and checks its SHA-256 against a hash the
-  MSI pinned at build time (`HKLM\SOFTWARE\WELDAP\ProviderHash`, SYSTEM-only). A swapped or repointed provider
-  makes the service refuse to start. Validated on the real MSI and in the acceptance suite.
-- **Hostile networking:** every exchange has bounded connect, handshake and request deadlines on both ends, and
-  TCP keepalive, so a black-holing firewall, a switch that truncates or reorders, an MTU hole, a half-open
-  connection or a slow-loris peer all become a clean offline fall-back (client) or a dropped connection (server),
+  MSI pinned at build time (`HKLM\SOFTWARE\WELDAP\ProviderHash`, writable by SYSTEM and Administrators only: an
+  administrator can replace any binary anyway, so the pins guard against everyone else). A swapped or repointed
+  provider makes the service refuse to start. Validated on the real MSI and in the acceptance suite.
+- **Hostile networking:** every exchange has bounded connect, handshake and request deadlines on both ends (on the
+  device, one 9 s budget for the whole round trip), and TCP keepalive, so a black-holing firewall, a switch that
+  truncates or reorders, an MTU hole, a half-open connection or a slow-loris peer all become a clean offline fall-back (client) or a dropped connection (server),
   never a hang or a crash. TLS integrity turns any injected or corrupted bytes into a dropped connection; the
   client trusts the server by key pin, so a middlebox or a rogue CA cannot impersonate it. Both the server's
   Docker suite and the Core transport tests drive these cases explicitly.

@@ -11,11 +11,11 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 # component: (globs, budget in lines). Budgets sit just above today's size; lower them as code is removed.
 BUDGETS = {
     "credential provider (C++, in LogonUI)": (["client/Weldap.CredentialProvider/*.cpp", "client/Weldap.CredentialProvider/*.h",
-                                              "client/Weldap.Shared/*.h"], 2140),  # -40: dropped unreachable CredUI/TS serialization branches
-    "client service (C#)": (["client/Weldap.Service/*.cs"], 975),  # +35 ListAll/Adopt/SetForceLocal, force-local; +20 integrity pins for service+admin
-    "client core (C#)": (["client/Weldap.Core/*.cs"], 905),  # +70 ServerTransport/AuditFormat; +75 adoption, lockdown/idle reconcile, force-local
+                                              "client/Weldap.Shared/*.h"], 2125),  # +15 adversarial: consent bound to the offered name  # -40: dropped unreachable CredUI/TS serialization branches; -30 net: sample dead code out, adoption consent box in
+    "client service (C#)": (["client/Weldap.Service/*.cs"], 1205),  # +90 adversarial: logging that cannot throw, a connect per server address, 8 pipe instances, Secret re-created SYSTEM-only, unreadable settings refuse start  # +35 ListAll/Adopt/SetForceLocal, force-local; +20 integrity pins for service+admin; +135 hardening: a pipe loop no client can stop, one budget for the whole server exchange, fault = non-zero exit (SCM restarts), lockdown disable, built-ins by SID
+    "client core (C#)": (["client/Weldap.Core/*.cs"], 1010),  # +15 adversarial: server call outside the account lock, no escalating adoption, guard keeps a usable admin  # +70 ServerTransport/AuditFormat; +75 adoption, lockdown/idle reconcile, force-local; +90 hardening: last-admin guard on every path, two-phase reconcile, wrong-clock-proof idle, stored-secret checks
     "server (Rust)": (["server/src/*.rs"], 1160),
-    "admin CLI (C#)": (["client/Weldap.Admin/*.cs"], 180),  # weldapadm: elevated local account manager
+    "admin CLI (C#)": (["client/Weldap.Admin/*.cs"], 190),  # weldapadm: elevated local account manager; +10 guards (adopt, last admin)
 }
 
 

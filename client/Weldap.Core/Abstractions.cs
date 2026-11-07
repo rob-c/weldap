@@ -61,20 +61,31 @@ public interface ISecretStore
 }
 
 /// <summary>
-/// A local account as this device sees it. <see cref="IsForceLocal"/> marks a protected backup account
-/// (<c>WELDAP-ForceLocal</c>) that WELDAP never adopts, disables or idle-reaps; <see cref="LastLogon"/> is the
-/// last interactive logon (null when never, or unknown), used for the idle-account cleanup.
+/// A local account as this device sees it. <see cref="Name"/> is always lower case (SAM names are case-insensitive;
+/// lower case is how a UUN is spelt, so an account created as "Alice" is the user "alice" everywhere in WELDAP).
+/// <see cref="IsForceLocal"/> marks a protected backup account (<c>WELDAP-ForceLocal</c>) and <see cref="IsBuiltIn"/>
+/// a Windows built-in account (recognised by SID, so renamed or localised ones too): WELDAP never signs either in,
+/// adopts, disables or idle-reaps them. <see cref="LastLogon"/> is the last interactive logon (null when never, or
+/// unknown), used for the idle-account cleanup.
 /// </summary>
 public sealed record LocalAccount(
     string Name, bool IsManaged, bool Enabled, bool IsAdmin, DateTimeOffset? Expires,
-    bool IsForceLocal = false, DateTimeOffset? LastLogon = null);
+    bool IsForceLocal = false, DateTimeOffset? LastLogon = null, bool IsBuiltIn = false)
+{
+    /// <summary>Never touched by WELDAP, whatever its group memberships say.</summary>
+    public bool IsProtected => IsForceLocal || IsBuiltIn;
+}
 
 public sealed class LocalAccountException(string message, int errorCode = 0) : Exception(message)
 {
     public int ErrorCode { get; } = errorCode;
 }
 
-/// <summary>Local SAM operations. Implementations throw <see cref="LocalAccountException"/>.</summary>
+/// <summary>
+/// Local SAM operations. Implementations throw <see cref="LocalAccountException"/>. SR-7: every mutator except
+/// <see cref="Create"/>, <see cref="Adopt"/> and <see cref="DisableUnmanaged"/> works only on a managed account and
+/// refuses anything else; those three refuse protected accounts (<see cref="LocalAccount.IsProtected"/>).
+/// </summary>
 public interface ILocalAccounts
 {
     LocalAccount? Find(string name);
@@ -82,7 +93,8 @@ public interface ILocalAccounts
     IReadOnlyList<LocalAccount> ListAll();
     /// <summary>Creates the account (password never expires, user cannot change it) in the managed group and Users.</summary>
     void Create(string name, ReadOnlySpan<char> password);
-    /// <summary>Brings a pre-existing account under management: adds it to the managed group and Users, in place.</summary>
+    /// <summary>Brings a pre-existing account under management, in place: adds it to the managed group and Users and
+    /// gives it the same password policy as a created one. The caller sets its password next.</summary>
     void Adopt(string name);
     void SetPassword(string name, ReadOnlySpan<char> password);
     void SetEnabled(string name, bool enabled);
@@ -92,6 +104,8 @@ public interface ILocalAccounts
     void EnsureUser(string name);
     /// <summary>Adds or removes the account from the protected backup group (<c>WELDAP-ForceLocal</c>).</summary>
     void SetForceLocal(string name, bool forceLocal);
+    /// <summary>Armed lockdown only: disables an unmanaged, unprotected account. Refuses managed and protected ones.</summary>
+    void DisableUnmanaged(string name);
 }
 
 public enum AuditKind
@@ -115,6 +129,8 @@ public enum AuditKind
     WouldDisable = 1212,
     /// <summary>A disable was declined to honour a safety invariant (e.g. the last enabled local admin).</summary>
     DisableSkipped = 1213,
+    /// <summary>Removing an account from Administrators was declined: it is the last enabled local admin.</summary>
+    DemotionSkipped = 1214,
     ServerUnreachable = 1400,
 }
 
@@ -137,7 +153,6 @@ public enum Reason
     RemovedFromUsers,
     AdminSync,
     ForceLocal,
-    Adopted,
     Idle,
     Lockdown,
     LastAdmin,
@@ -146,6 +161,7 @@ public enum Reason
 /// <summary>One audit record. Never carries a password.</summary>
 public sealed record AuditEvent(AuditKind Kind, string Uun, Reason Reason = Reason.None, string? Detail = null);
 
+/// <summary>The audit sink. Must never throw: callers write events while holding secrets they still have to zero.</summary>
 public interface IAudit
 {
     void Write(AuditEvent e);

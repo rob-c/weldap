@@ -78,11 +78,8 @@ HRESULT RetrieveNegotiateAuthPackage(
     _Out_ ULONG *pulAuthPackage
     );
 
-//encrypt the local password with CredProtect and copy it (an empty password is copied as-is)
-HRESULT ProtectIfNecessaryAndCopyPassword(
-    _In_ PCWSTR pwzPassword,
-    _Outptr_result_nullonfailure_ PWSTR *ppwzProtectedPassword
-    );
+// CredProtect-encrypts the (non-empty) local password into a CoTaskMem string; free it with CoTaskMemFreeSecureString.
+HRESULT ProtectAndCopyPassword(_In_ PCWSTR pwzPassword, _Outptr_result_nullonfailure_ PWSTR *ppwzProtected);
 
 // WELDAP: zero a CoTaskMem-allocated string, then free it. Safe with nullptr.
 void CoTaskMemFreeSecureString(_In_opt_ PWSTR pwz);

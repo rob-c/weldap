@@ -85,8 +85,6 @@ public class ServerRequestTests
     [InlineData(1, 1)]
     [InlineData(99, 99)]
     [InlineData(100, 100)]
-    [InlineData(101, 100)]
-    [InlineData(250, 100)]
     public void Status_request_asks_about_at_most_100(int count, int expected)
     {
         var uuns = Enumerable.Range(0, count).Select(i => $"u{i}").ToList();
@@ -97,11 +95,24 @@ public class ServerRequestTests
         Assert.Equal(uuns.Take(expected), root.GetProperty("uuns").EnumerateArray().Select(e => e.GetString()));
         Assert.Equal(100, ServerMessages.MaxStatusUuns);
     }
+
+    /// <summary>Never silently truncated: a name left out of the request would read as "not a user".</summary>
+    [Theory]
+    [InlineData(101)]
+    [InlineData(250)]
+    public void Status_request_refuses_more_than_100(int count) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ServerMessages.Status(Enumerable.Range(0, count).Select(i => $"u{i}").ToList()));
 }
 
 public class AuthReplyTests
 {
     private static ServerAnswer Parse(string json) => ServerMessages.ParseAuthReply(Encoding.UTF8.GetBytes(json));
+
+    /// <summary>A lone surrogate escape makes GetString throw InvalidOperationException, not JsonException.</summary>
+    [Fact]
+    public void A_lone_surrogate_is_malformed_not_an_exception() =>
+        Assert.Equal(ServerAnswer.Failed("server: malformed reply"), Parse("""{"v":1,"result":"\ud800"}"""));
 
     public static TheoryData<string, ServerOutcome, bool?, bool?> Replies() => new()
     {
@@ -303,6 +314,7 @@ public class StatusReplyTests
     [InlineData("""{"v":1,"result":"ok","users":[],"admins":[]} x""")]
     [InlineData("""{"v":1,"result":"ok","users":["alice"],"users":[],"admins":[]}""")]
     [InlineData("""{"v":1,"result":"ok","users":[],"users":["alice"],"admins":[]}""")]
+    [InlineData("""{"v":1,"result":"ok","users":["\ud800"],"admins":[]}""")] // a lone surrogate: GetString throws
     public void Rejects(string json) => Assert.Null(Parse(json));
 
     [Fact]

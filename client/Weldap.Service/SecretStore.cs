@@ -39,7 +39,21 @@ internal sealed unsafe class RegistrySecretStore : ISecretStore
         using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
         try
         {
-            return create ? hklm.CreateSubKey($@"{AccountsPath}\{uun}", writable: true) : hklm.OpenSubKey($@"{AccountsPath}\{uun}", writable: true);
+            if (create)
+            {
+                // Never let CreateSubKey make a missing Secret key itself: it would inherit the config key's ACL,
+                // which Users can read. (Deleted while running, say.) Re-create it SYSTEM-only, and check it, first.
+                using (var secret = hklm.OpenSubKey(RegistrySettings.SecretKeyPath))
+                {
+                    if (secret is null) EnsureKey();
+                }
+                return hklm.CreateSubKey($@"{AccountsPath}\{uun}", writable: true);
+            }
+            return hklm.OpenSubKey($@"{AccountsPath}\{uun}", writable: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new LocalAccountException($"secret store: {ex.Message}");
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException)
         {
@@ -68,8 +82,8 @@ internal sealed unsafe class RegistrySecretStore : ISecretStore
 
     public void SetLocalPassword(string uun, ReadOnlySpan<char> password)
     {
-        using var key = Account(uun, create: true)!;
-        key.SetValue("LocalPassword", Protect(MemoryMarshal.AsBytes(password)), RegistryValueKind.Binary);
+        var blob = Protect(MemoryMarshal.AsBytes(password));
+        Store(uun, key => key.SetValue("LocalPassword", blob, RegistryValueKind.Binary));
     }
 
     public byte[]? GetVerifier(string uun)
@@ -80,14 +94,15 @@ internal sealed unsafe class RegistrySecretStore : ISecretStore
 
     public void SetVerifier(string uun, ReadOnlySpan<byte> verifier)
     {
-        using var key = Account(uun, create: true)!;
-        key.SetValue("Verifier", Protect(verifier), RegistryValueKind.Binary);
+        var blob = Protect(verifier);
+        Store(uun, key => key.SetValue("Verifier", blob, RegistryValueKind.Binary));
     }
 
     public void ClearVerifier(string uun)
     {
         using var key = Account(uun, create: false);
-        key?.DeleteValue("Verifier", throwOnMissingValue: false);
+        if (key is null) return;
+        Guard(() => key.DeleteValue("Verifier", throwOnMissingValue: false));
     }
 
     public int GetOfflineFailures(string uun)
@@ -96,10 +111,27 @@ internal sealed unsafe class RegistrySecretStore : ISecretStore
         return key?.GetValue("OfflineFailures") is int n ? n : 0;
     }
 
-    public void SetOfflineFailures(string uun, int count)
+    public void SetOfflineFailures(string uun, int count) =>
+        Store(uun, key => key.SetValue("OfflineFailures", count, RegistryValueKind.DWord));
+
+    private static void Store(string uun, Action<RegistryKey> write)
     {
         using var key = Account(uun, create: true)!;
-        key.SetValue("OfflineFailures", count, RegistryValueKind.DWord);
+        Guard(() => write(key));
+    }
+
+    // Registry faults surface as LocalAccountException, which the login and reconcile paths handle per account
+    // (anything else would abort a whole reconcile pass, or turn a sign-in into a generic error).
+    private static void Guard(Action op)
+    {
+        try
+        {
+            op();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException)
+        {
+            throw new LocalAccountException($"secret store: {ex.GetType().Name}");
+        }
     }
 
     private static byte[] Protect(ReadOnlySpan<byte> plain)

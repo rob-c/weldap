@@ -47,7 +47,6 @@ internal static unsafe partial class Native
     public const uint UF_NORMAL_ACCOUNT = 0x0200;
     public const uint UF_DONT_EXPIRE_PASSWD = 0x10000;
     public const uint TIMEQ_FOREVER = 0xFFFFFFFF;
-    public const int SidTypeUser = 1;
     public const uint FILTER_NORMAL_ACCOUNT = 0x0002;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -112,14 +111,6 @@ internal static unsafe partial class Native
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    public struct LOCALGROUP_MEMBERS_INFO_1
-    {
-        public IntPtr lgrmi1_sid;
-        public int lgrmi1_sidusage;
-        public char* lgrmi1_name;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
     public struct LOCALGROUP_MEMBERS_INFO_3
     {
         public char* lgrmi3_domainandname;
@@ -133,7 +124,7 @@ internal static unsafe partial class Native
 
     [LibraryImport("netapi32.dll")]
     public static partial uint NetUserEnum(char* servername, uint level, uint filter, out IntPtr bufptr,
-        uint prefmaxlen, out uint entriesread, out uint totalentries, IntPtr* resumehandle);
+        uint prefmaxlen, out uint entriesread, out uint totalentries, uint* resumehandle);
 
     [LibraryImport("netapi32.dll")]
     public static partial uint NetUserSetInfo(char* servername, char* username, uint level, void* buf, out uint parmErr);
@@ -150,10 +141,6 @@ internal static unsafe partial class Native
 
     [LibraryImport("netapi32.dll")]
     public static partial uint NetLocalGroupDelMembers(char* servername, char* groupname, uint level, void* buf, uint totalentries);
-
-    [LibraryImport("netapi32.dll")]
-    public static partial uint NetLocalGroupGetMembers(char* servername, char* localgroupname, uint level,
-        out IntPtr bufptr, uint prefmaxlen, out uint entriesread, out uint totalentries, IntPtr* resumehandle);
 
     [LibraryImport("netapi32.dll")]
     public static partial uint NetApiBufferFree(IntPtr buffer);
@@ -184,6 +171,10 @@ internal static unsafe partial class Native
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint clientProcessId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DisconnectNamedPipe(SafePipeHandle pipe);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     public static partial SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint pid);

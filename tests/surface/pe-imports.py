@@ -13,8 +13,7 @@ import struct
 import sys
 
 # Exactly what the provider imports today (static CRT; CNG, crypt32 base64, LSA, COM, shlwapi, user32), the same
-# on x64 and ARM64. (credui.lib and gdi32.lib are on the link line but nothing is pulled from them.) Anything
-# new has to be added here on purpose.
+# on x64 and ARM64. Anything new has to be added here on purpose.
 ALLOWED = {
     "kernel32.dll",
     "advapi32.dll",
@@ -23,7 +22,6 @@ ALLOWED = {
     "bcrypt.dll",
     "crypt32.dll",
     "shlwapi.dll",
-    "credui.dll",
     "user32.dll",
 }
 # Never in LogonUI through this DLL: the provider talks only to the local pipe.

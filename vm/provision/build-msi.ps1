@@ -8,7 +8,11 @@
 #   $env:WELDAP_SIGN_PFX (+ _PFX_PASSWORD)   path to a PFX file (and its password)
 #   $env:WELDAP_SIGN_TIMESTAMP_URL           RFC-3161 timestamp server (default: DigiCert)
 # With none set, the build is unsigned (a dev build), exactly as an unset ProviderHash means "not pinned".
-param([string]$Root = 'C:\src\windev')
+# -ProductVersion (or $env:WELDAP_VERSION) sets the MSI version for a release. Without it, a build is stamped
+# <major>.<minor>.<days since 2026-01-01> (major.minor from Weldap.wixproj): Windows Installer compares the first
+# three fields, so a stale MSI can never replace a newer build (a downgrade is refused), while a rebuild on the same
+# day still upgrades in place (Package.wxs: AllowSameVersionUpgrades). A release bumps the minor version.
+param([string]$Root = 'C:\src\windev', [string]$ProductVersion = $env:WELDAP_VERSION)
 $ErrorActionPreference = 'Stop'
 $env:PATH = "C:\Program Files\dotnet;$env:PATH"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
@@ -53,6 +57,13 @@ function Invoke-Sign([string[]]$Files) {
     }
 }
 
+if (-not $ProductVersion) {
+    $wixproj = Get-Content -Raw (Join-Path $Root 'installer\Weldap.wixproj')
+    if ($wixproj -notmatch '<ProductVersion[^>]*>(\d+)\.(\d+)\.') { throw 'no default ProductVersion in Weldap.wixproj' }
+    $ProductVersion = '{0}.{1}.{2}' -f $Matches[1], $Matches[2], [int]([DateTime]::UtcNow.Date - [DateTime]'2026-01-01').TotalDays
+}
+Write-Host "MSI version $ProductVersion"
+
 & (Join-Path $Root 'client\Weldap.CredentialProvider\build.ps1')
 
 foreach ($t in @(@{ Wix = 'x64'; Rid = 'win-x64'; Cp = 'x64' }, @{ Wix = 'arm64'; Rid = 'win-arm64'; Cp = 'ARM64' })) {
@@ -74,7 +85,7 @@ foreach ($t in @(@{ Wix = 'x64'; Rid = 'win-x64'; Cp = 'x64' }, @{ Wix = 'arm64'
     dotnet build (Join-Path $Root 'installer\Weldap.wixproj') -c Release --nologo -v q `
         "-p:InstallerPlatform=$($t.Wix)" "-p:ServiceDir=$serviceDir" "-p:ProviderDir=$cpDir" "-p:AdminDir=$adminDir" `
         "-p:ProviderHash=$providerHash" "-p:ServiceHash=$serviceHash" "-p:AdminHash=$adminHash" `
-        "-p:IntermediateOutputPath=obj\$($t.Wix)\" `
+        "-p:IntermediateOutputPath=obj\$($t.Wix)\" "-p:ProductVersion=$ProductVersion" `
         -o $outDir
     if ($LASTEXITCODE -ne 0) { throw "MSI build failed for $($t.Wix)" }
     $msi = Get-ChildItem -Path $outDir -Recurse -Filter "Weldap-$($t.Wix).msi" | Select-Object -First 1

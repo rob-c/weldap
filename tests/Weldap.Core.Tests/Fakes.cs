@@ -176,6 +176,8 @@ internal sealed class FakeServer : IWeldapServer
     public HashSet<string> Users { get; } = [];
     public HashSet<string> Admins { get; } = [];
     public ServerAnswer? ForcedAnswer { get; set; }
+    /// <summary>Runs while the "server" is being asked (the window in which other threads may change things).</summary>
+    public Action? OnAuthenticate { get; set; }
     public bool StatusFails { get; set; }
     public Func<IReadOnlyCollection<string>, StatusSnapshot?>? StatusOverride { get; set; }
     public int AuthCalls { get; private set; }
@@ -192,6 +194,7 @@ internal sealed class FakeServer : IWeldapServer
     public ServerAnswer Authenticate(string uun, Scenario scenario, SealedPassword sealedPassword)
     {
         AuthCalls++;
+        OnAuthenticate?.Invoke();
         LastUun = uun;
         LastScenario = scenario;
         LastSealed = sealedPassword;
@@ -221,6 +224,7 @@ internal sealed class FakeAccounts : ILocalAccounts
         public bool Admin { get; set; }
         public bool User { get; set; } = true;
         public bool ForceLocal { get; set; }
+        public bool BuiltIn { get; set; }
         public string Password { get; set; } = "";
         public DateTimeOffset? Expires { get; set; }
         public DateTimeOffset? LastLogon { get; set; }
@@ -237,7 +241,7 @@ internal sealed class FakeAccounts : ILocalAccounts
     public int Mutations => Calls.Count(c => c is not ("Find" or "ListAll"));
 
     public Acct Add(string name, bool managed = true, bool enabled = true, bool admin = false,
-        DateTimeOffset? expires = null, bool forceLocal = false, DateTimeOffset? lastLogon = null) =>
+        DateTimeOffset? expires = null, bool forceLocal = false, DateTimeOffset? lastLogon = null, bool builtIn = false) =>
         All[name] = new Acct
         {
             Name = name,
@@ -247,6 +251,7 @@ internal sealed class FakeAccounts : ILocalAccounts
             Expires = expires,
             ForceLocal = forceLocal,
             LastLogon = lastLogon,
+            BuiltIn = builtIn,
         };
 
     private void Op(string op, string? name = null)
@@ -256,8 +261,16 @@ internal sealed class FakeAccounts : ILocalAccounts
             throw new LocalAccountException($"{op} failed", 5);
     }
 
+    // Like the shell (LocalAccounts): names come back lower case, whatever their SAM spelling.
     private static LocalAccount Snapshot(Acct a) =>
-        new(a.Name, a.Managed, a.Enabled, a.Admin, a.Expires, a.ForceLocal, a.LastLogon);
+        new(a.Name.ToLowerInvariant(), a.Managed, a.Enabled, a.Admin, a.Expires, a.ForceLocal, a.LastLogon, a.BuiltIn);
+
+    // Like the shell: SR-7, the mutators touch managed accounts only, and nothing ever touches a protected one.
+    private Acct Managed(string name) =>
+        All[name] is { Managed: true } a ? a : throw new LocalAccountException($"{name} is not managed; refusing to change it");
+
+    private Acct Unprotected(string name) =>
+        All[name] is { ForceLocal: false, BuiltIn: false } a ? a : throw new LocalAccountException($"{name} is protected");
 
     public LocalAccount? Find(string name)
     {
@@ -280,7 +293,7 @@ internal sealed class FakeAccounts : ILocalAccounts
     public void Adopt(string name)
     {
         Op("Adopt", name);
-        var a = All[name];
+        var a = Unprotected(name);
         a.Managed = true;
         a.User = true;
     }
@@ -288,31 +301,39 @@ internal sealed class FakeAccounts : ILocalAccounts
     public void SetPassword(string name, ReadOnlySpan<char> password)
     {
         Op("SetPassword", name);
-        All[name].Password = password.ToString();
+        Managed(name).Password = password.ToString();
     }
 
     public void SetEnabled(string name, bool enabled)
     {
         Op("SetEnabled", name);
-        All[name].Enabled = enabled;
+        Managed(name).Enabled = enabled;
     }
 
     public void SetExpiry(string name, DateTimeOffset? expires)
     {
         Op("SetExpiry", name);
-        All[name].Expires = expires;
+        Managed(name).Expires = expires;
     }
 
     public void SetAdmin(string name, bool admin)
     {
         Op("SetAdmin", name);
-        All[name].Admin = admin;
+        Managed(name).Admin = admin;
     }
 
     public void EnsureUser(string name)
     {
         Op("EnsureUser", name);
-        All[name].User = true;
+        Managed(name).User = true;
+    }
+
+    public void DisableUnmanaged(string name)
+    {
+        Op("DisableUnmanaged", name);
+        var a = Unprotected(name);
+        if (a.Managed) throw new LocalAccountException($"{name} is managed");
+        a.Enabled = false;
     }
 
     public void SetForceLocal(string name, bool forceLocal)

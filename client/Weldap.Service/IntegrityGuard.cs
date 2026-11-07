@@ -9,7 +9,8 @@ namespace Weldap.Service;
 /// one registered under the WELDAP CLSID's <c>InprocServer32</c> — plus the service's own exe and the admin CLI
 /// must each sit in the install folder and match the SHA-256 pinned at build time
 /// (<c>HKLM\SOFTWARE\WELDAP\{ProviderHash,ServiceHash,AdminHash}</c>, written by the MSI over the signed
-/// binaries, SYSTEM-only like the rest of the config). A swapped or patched binary — or a CLSID quietly
+/// binaries; like the rest of the config, writable by SYSTEM and Administrators only -- an administrator can
+/// replace any binary anyway, so the pins guard against everyone else). A swapped or patched binary — or a CLSID quietly
 /// repointed at an attacker's DLL elsewhere — fails the check and the service refuses to start, so nothing
 /// tampered ever gets to seal a password. Each pin left unset (a dev install) is skipped with a note.
 /// </summary>

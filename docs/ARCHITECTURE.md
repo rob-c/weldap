@@ -46,7 +46,7 @@ Three independent trust decisions, each fail-closed:
 
 | Boundary | Who trusts whom, and how |
 | --- | --- |
-| **Pipe** (provider ↔ service) | Both ends require the other process token to be SYSTEM (`S-1-5-18`); the pipe DACL allows SYSTEM and denies NETWORK, rejects remote clients, and is created with `FILE_FLAG_FIRST_PIPE_INSTANCE` so the name can't be squatted. |
+| **Pipe** (provider ↔ service) | Both ends require the other process token to be SYSTEM (`S-1-5-18`); the pipe DACL allows SYSTEM and denies NETWORK, rejects remote clients, and is created with `FILE_FLAG_FIRST_PIPE_INSTANCE` so the name can't be squatted while the service runs (if another process holds it at start, the service retries with backoff; the client refuses a non-SYSTEM server anyway). |
 | **Client → server** | Mutual TLS. The client authenticates with a per-device certificate; the server authenticates to the client **by a SHA-256 pin of its certificate's SubjectPublicKeyInfo** (`ServerMessages.Pin`), *not* by a CA or hostname — a rogue CA or middlebox cannot impersonate it. |
 | **Server → device** | The server verifies each device certificate against the device CA **and a mandatory CRL**; an expired or missing CRL fails closed (no client is trusted). |
 
@@ -76,8 +76,15 @@ credential. It is never logged at any level (enforced mechanically by `tests/lin
 5. The **server** opens the sealed password into `mlock`ed memory (`seal.rs` → `secret.rs`), binds to 389 DS
    as the user (`ldap.rs`, a minimal hand-written BER client), reads the user's group membership
    (`directory.rs`), and replies `{result:"ok", user:bool, admin:bool}`.
-6. The service applies the flags (`Reconciler`/`LocalAccounts`): create or update the local account, set its
-   admin membership, mark it WELDAP-managed, and hand LogonUI a fresh random local password to actually log on.
+6. The service applies the flags (`LoginHandler`/`LocalAccounts`): create or update the local account, set its
+   admin membership, mark it WELDAP-managed, and hand LogonUI the account's random local password to actually log
+   on (generated once, kept in the secret store, and re-applied to the account at every online sign-in, so an
+   account reset by hand converges back).
+
+If the name is a pre-existing local account WELDAP does not manage (and `AdoptPreexisting` is on), step 6 waits
+even when the server says `user`: the reply is **adopt** with a warning, the tile shows a Continue box, and only a
+resubmit with it ticked (the consent flag; the server checks the password again, like any sign-in) adopts the
+account and gives it a fresh random password.
 
 ### Offline sign-in
 When the server is unreachable, the service verifies the typed password against the **offline verifier** stored
@@ -87,9 +94,13 @@ configurable max age (default 180 days) and a lockout after repeated failures. T
 stored — only this one-way verifier.
 
 ### Reconciliation
-Hourly (and after each online logon) the service asks the server, via the `status` op, only about *its own*
-managed accounts (≤ `MAX_STATUS_UUNS` UUNs) — never a directory dump. Users removed upstream are disabled
-locally and their offline verifier cleared; admin status is synced.
+At service start and hourly the service asks the server, via the `status` op, about every local account name that
+can be a UUN, managed or not (excluded and protected accounts aside), in batches of ≤ `MAX_STATUS_UUNS` (100) —
+never a directory dump. It is two-phase so the network never holds the account lock: `Reconciler.Read` asks the
+server without the lock, `Reconciler.Apply` acts under it against a fresh account list (an account that appeared in
+between waits for the next pass). Users removed upstream are disabled locally and their offline verifier cleared;
+admin status is synced; idle managed accounts are disabled; unmanaged accounts unknown to the directory are the
+lockdown candidates. Any failed read changes nothing.
 
 ## 4. Component map
 
@@ -100,7 +111,7 @@ Microsoft's MIT credential-provider sample.
 | File | Responsibility |
 | --- | --- |
 | `Dll.cpp`, `WeldapProvider.*` | COM entry points, the provider, usage-scenario gating (only `CPUS_LOGON`/`CPUS_UNLOCK_WORKSTATION`). |
-| `WeldapCredential.*` | The tile: fields, `GetSerialization`, password capture and zeroing. |
+| `WeldapCredential.*` | The tile: fields (including the adoption Continue box), `GetSerialization`, password capture and zeroing. |
 | `WeldapSeal.*` | HPKE sealing (hand-rolled over BCrypt) and the PBKDF2 offline verifier; all secret-buffer zeroing. |
 | `WeldapClient.*` | The pipe v3 codec and the pipe client (`WeldapAuthenticateEx`). |
 | `helpers.*` | Sample-derived field/serialization helpers (mostly inherited boilerplate). |
@@ -151,8 +162,20 @@ Break one of these and something important fails silently. They are the first th
   accept a subset of what `audit::is_identifier` allows, so every accepted name logs verbatim rather than as
   `"?"`. Widening one requires widening `is_identifier` to match (the predicate is duplicated because `audit`
   is deliberately dependency-free).
-- **`LoginReply.Mode` is meaningful only when `Result == Ok`.** Deny/Error replies always report `Online` and
-  the mode byte is not sent.
+- **`LoginReply.Mode` is meaningful only when `Result == Ok`.** Deny/Error/Adopt replies always report `Online`;
+  the mode byte is always sent, as 0 unless ok+offline.
+- **The time budget nests.** Tile 15 s (`WELDAP_CLIENT_DEADLINE_MS`, from before it opens the pipe) > service
+  14 s per pipe client (`PipeServer`) > one server round trip 9 s (`LoginSettings.ServerBudgetSeconds`, connect
+  3 s of it). Change one and keep the order, or the tile gives up before the service answers.
+- **No pipe client can stop the service.** Each of the 8 pipe instances' loops resets its instance after every
+  client, whatever state it is left in, contains every per-client fault, and bounds every wait. A fault once
+  running exits with code 1 so the SCM restarts it; only a refusal at start (config, ACL, integrity) stays stopped.
+- **Nothing waits on the network while holding the account lock.** A sign-in asks the server outside the lock and
+  then decides under it, against the account as it is by then (`LoginHandler`); the reconciler does the same
+  (`Read`, then `Apply`). So concurrent sign-ins each get their own time budget, and a change made meanwhile (a
+  backup made force-local, an account another sign-in created) is honoured, not overwritten.
+- **The last enabled local administrator is never disabled or demoted,** on every path (sign-in, reconcile,
+  lockdown, `weldapadm`); protected accounts (force-local, and the built-ins by SID) are never touched.
 - **Fail closed, always.** A lock poisoned, a CRL expired, a config ACL too broad, a TLS integrity failure — each
   denies or drops rather than degrading. The server treats a malformed frame as "no reply at all".
 - **No networking in the credential provider.** The DLL's import table is checked against an allow-list
@@ -168,7 +191,7 @@ What can be checked where — this is why some changes validate on a laptop and 
 | Server (Rust) | Docker (distro Rust + distro LLVM) | `tests/quality.sh server` — clippy pedantic, tests, **100/100**; `deny` for the supply chain |
 | Lints / surface | host | `paranoia`, `budget`, `protocol`, `shellcheck`, `imports` (see `tests/quality.sh`) |
 | `Weldap.Service` (C#) | compiles on host; **behaviour only in a VM** | the on-VM acceptance suite (`tests/acceptance/run.sh`) |
-| Credential provider (C++) | **MSVC in vm1 only** | the 620-check harness + `tests/acceptance/run.sh` |
+| Credential provider (C++) | **MSVC in vm1 only** | the 631-check harness + `tests/acceptance/run.sh` |
 
 CI (`.github/workflows/ci.yml`) runs everything in the first three rows on every push/PR. The Windows-only rows
 need the QEMU VMs in `vm/` (see `README.md`).

@@ -39,21 +39,40 @@ internal static unsafe class RegistrySettings
 
         string Str(string name) => key.GetValue(name) as string is { Length: > 0 } s
             ? s : throw new InvalidOperationException($"{name} not set");
-        int Dword(string name, int fallback) => key.GetValue(name) is int i ? i : fallback;
+        // A REG_DWORD, or decimal digits in a REG_SZ (the MSI writes its numbers as strings, so that a value it
+        // remembered from the registry -- "#636" in msiexec's raw form -- round-trips too); anything else is the default.
+        // A value that is there but unreadable (wrong type, "off", "0x1") refuses start, like any bad setting: falling
+        // back to the default would fail open (AdoptPreexisting defaults to on; ExcludedAccounts to nobody).
+        int Dword(string name, int fallback) => key.GetValue(name) switch
+        {
+            null => fallback,
+            int i => i,
+            string s when int.TryParse(s.TrimStart('#'), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var n) => n,
+            _ => throw new InvalidOperationException($"{name} is not a number"),
+        };
         bool Flag(string name, bool fallback) => Dword(name, fallback ? 1 : 0) != 0;
+        object? List(string name) => key.GetValue(name) is null or string or string[]? key.GetValue(name)
+            : throw new InvalidOperationException($"{name} is not a string or multi-string list");
+
+        // The provider seals with these; the service never uses them, but checks them here so a bad MSI value
+        // stops the service with a clear event instead of failing every sign-in at the tile.
+        if (!SettingsText.IsServerKey(Str("ServerKey"))) throw new InvalidOperationException("ServerKey is not a P-256 public key (base64)");
+        if (!SettingsText.IsKeyId(Str("ServerKeyId"))) throw new InvalidOperationException("ServerKeyId is not 1-32 of [a-z0-9-]");
+
         var settings = new LoginSettings
         {
             ServerHost = Str("ServerHost"),
             ServerPort = Dword("ServerPort", 636),
-            ServerPins = SettingsText.SplitList(key.GetValue("ServerPins")),
-            ExcludedAccounts = SettingsText.SplitList(key.GetValue("ExcludedAccounts")).Select(s => s.ToLowerInvariant()).ToArray(),
-            MaxOfflineDays = Math.Clamp(Dword("MaxOfflineDays", 180), 0, 3650),
-            OfflineMaxFailures = Math.Clamp(Dword("OfflineMaxFailures", 10), 1, 100),
+            ServerPins = SettingsText.SplitList(List("ServerPins")),
+            ExcludedAccounts = SettingsText.SplitList(List("ExcludedAccounts")).Select(s => s.ToLowerInvariant()).ToArray(),
+            MaxOfflineDays = Dword("MaxOfflineDays", 180),
+            OfflineMaxFailures = Dword("OfflineMaxFailures", 10),
             AdoptPreexisting = Flag("AdoptPreexisting", true),
             LockdownEnforce = Flag("LockdownEnforce", false),
-            IdleDisableDays = Math.Clamp(Dword("IdleDisableDays", 30), 0, 3650),
+            IdleDisableDays = Dword("IdleDisableDays", 30),
         };
-        return SettingsText.Validate(settings);
+        return SettingsText.Validate(settings); // also clamps the day and failure counts to their ranges
     }
 
     private static void CheckAcl(RegistryKey key)

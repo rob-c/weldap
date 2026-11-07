@@ -23,9 +23,10 @@ enum WELDAP_FIELD_ID
     PFI_LARGE_TEXT     = 2,
     PFI_UUN            = 3,
     PFI_PASSWORD       = 4,
-    PFI_SUBMIT_BUTTON  = 5,
-    PFI_STATUS_TEXT    = 6,
-    PFI_NUM_FIELDS     = 7,  // keep last: number of fields
+    PFI_CONSENT        = 5,  // hidden until the service offers adoption (WELDAP_RESULT_ADOPT)
+    PFI_SUBMIT_BUTTON  = 6,
+    PFI_STATUS_TEXT    = 7,
+    PFI_NUM_FIELDS     = 8,  // keep last: number of fields
 };
 
 // The first value indicates when the tile is displayed (selected, not selected)
@@ -43,6 +44,7 @@ static const FIELD_STATE_PAIR s_rgFieldStatePairs[] =
     { CPFS_DISPLAY_IN_BOTH,            CPFIS_NONE    },    // PFI_LARGE_TEXT
     { CPFS_DISPLAY_IN_SELECTED_TILE,   CPFIS_FOCUSED },    // PFI_UUN
     { CPFS_DISPLAY_IN_SELECTED_TILE,   CPFIS_NONE    },    // PFI_PASSWORD
+    { CPFS_HIDDEN,                     CPFIS_NONE    },    // PFI_CONSENT
     { CPFS_DISPLAY_IN_SELECTED_TILE,   CPFIS_NONE    },    // PFI_SUBMIT_BUTTON
     { CPFS_DISPLAY_IN_SELECTED_TILE,   CPFIS_NONE    },    // PFI_STATUS_TEXT
 };
@@ -56,6 +58,7 @@ static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR s_rgCredProvFieldDescriptors[]
     { PFI_LARGE_TEXT,    CPFT_LARGE_TEXT,    const_cast<PWSTR>(L"WELDAP")                                 },
     { PFI_UUN,           CPFT_EDIT_TEXT,     const_cast<PWSTR>(L"Username")                                  },
     { PFI_PASSWORD,      CPFT_PASSWORD_TEXT, const_cast<PWSTR>(L"Password")                                  },
+    { PFI_CONSENT,       CPFT_CHECKBOX,      const_cast<PWSTR>(L"Continue")                                  },
     { PFI_SUBMIT_BUTTON, CPFT_SUBMIT_BUTTON, const_cast<PWSTR>(L"Submit")                                    },
     { PFI_STATUS_TEXT,   CPFT_SMALL_TEXT,    const_cast<PWSTR>(L"Status")                                    },
 };

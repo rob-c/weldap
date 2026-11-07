@@ -27,8 +27,11 @@ extern HRESULT CWeldapProvider_CreateInstance(_In_ REFIID riid, _COM_Outptr_ voi
 class CClassFactory : public IClassFactory
 {
 public:
+    // A live factory holds the DLL (COM rules): DllCanUnloadNow must not let CoFreeUnusedLibraries unmap code a
+    // caller of CoGetClassObject still holds a pointer into.
     CClassFactory() : _cRef(1)
     {
+        DllAddRef();
     }
 
     // IUnknown
@@ -87,6 +90,7 @@ public:
 private:
     ~CClassFactory()
     {
+        DllRelease();
     }
     long _cRef;
 };
@@ -139,19 +143,9 @@ STDAPI DllGetClassObject(_In_ REFCLSID rclsid, _In_ REFIID riid, _Outptr_ LPVOID
     return CClassFactory_CreateInstance(rclsid, riid, ppv);
 }
 
-STDAPI_(BOOL) DllMain(_In_ HINSTANCE hinstDll, _In_ DWORD dwReason, _In_opt_ void *)
+// No DisableThreadLibraryCalls: the DLL links the static CRT (/MT), which needs the thread notifications.
+STDAPI_(BOOL) DllMain(_In_ HINSTANCE hinstDll, _In_ DWORD, _In_opt_ void *)
 {
-    switch (dwReason)
-    {
-    case DLL_PROCESS_ATTACH:
-        DisableThreadLibraryCalls(hinstDll);
-        break;
-    case DLL_PROCESS_DETACH:
-    case DLL_THREAD_ATTACH:
-    case DLL_THREAD_DETACH:
-        break;
-    }
-
     g_hinst = hinstDll;
     return TRUE;
 }

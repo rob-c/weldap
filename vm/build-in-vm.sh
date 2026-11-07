@@ -31,9 +31,10 @@ vm/vmctl.sh push "$VM" "$work/src.zip" "$G\\src.zip"
 vm/vmctl.sh ps "$VM" "Expand-Archive -Force '$G\\src.zip' '$G'; Remove-Item '$G\\src.zip'" >/dev/null
 
 # Pass any WELDAP_SIGN_* set on the host into the guest session so build-msi.ps1 signs the binaries and the MSI
-# (and pins over the signed bytes). Unset = unsigned dev build, exactly as build-msi.ps1 documents.
+# (and pins over the signed bytes), and WELDAP_VERSION (the MSI's ProductVersion). Unset = an unsigned dev build,
+# stamped <major>.<minor>.<days since 2026-01-01>, exactly as build-msi.ps1 documents.
 sign_prelude=""
-for v in WELDAP_SIGN_THUMBPRINT WELDAP_SIGN_PFX WELDAP_SIGN_PFX_PASSWORD WELDAP_SIGN_TIMESTAMP_URL; do
+for v in WELDAP_SIGN_THUMBPRINT WELDAP_SIGN_PFX WELDAP_SIGN_PFX_PASSWORD WELDAP_SIGN_TIMESTAMP_URL WELDAP_VERSION; do
     if [[ -n "${!v:-}" ]]; then
         val="${!v//\'/\'\'}" # single-quote the value for PowerShell, doubling any embedded quote
         sign_prelude+="\$env:$v='$val'; "

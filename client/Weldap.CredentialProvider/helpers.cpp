@@ -170,7 +170,7 @@ static void _UnicodeStringPackedUnicodeStringCopy(
 // passed-in strings.  This is useful if you will later use KerbInteractiveUnlockLogonPack
 // to serialize the structure.
 //
-// The password arrives already in CredProtect-encrypted form (see ProtectIfNecessaryAndCopyPassword);
+// The password arrives already in CredProtect-encrypted form (see ProtectAndCopyPassword);
 // the system accepts encrypted credentials for CPUS_LOGON and CPUS_UNLOCK_WORKSTATION, the only two
 // scenarios this provider serves.
 //
@@ -279,7 +279,9 @@ HRESULT KerbInteractiveUnlockLogonPack(
     KERB_INTERACTIVE_UNLOCK_LOGON *pkiulOut = (KERB_INTERACTIVE_UNLOCK_LOGON*)CoTaskMemAlloc(cb);
     if (pkiulOut)
     {
-        ZeroMemory(&pkiulOut->LogonId, sizeof(pkiulOut->LogonId));
+        // All of it, header padding included: LSA gets no stale bytes from LogonUI's heap (the strings below then
+        // fill everything after the header).
+        ZeroMemory(pkiulOut, cb);
 
         //
         // point pbBuffer at the beginning of the extra space
@@ -323,28 +325,6 @@ HRESULT KerbInteractiveUnlockLogonPack(
 }
 
 //
-// This function packs the string pszSourceString in pszDestinationString
-// for use with LSA functions including LsaLookupAuthenticationPackage.
-//
-static HRESULT _LsaInitString(
-    __out PSTRING pszDestinationString,
-    __in PCSTR pszSourceString
-    )
-{
-    size_t cchLength = strlen(pszSourceString);
-    USHORT usLength;
-    HRESULT hr = SizeTToUShort(cchLength, &usLength);
-    if (SUCCEEDED(hr))
-    {
-        pszDestinationString->Buffer = (PCHAR)pszSourceString;
-        pszDestinationString->Length = usLength;
-        pszDestinationString->MaximumLength = pszDestinationString->Length+1;
-        hr = S_OK;
-    }
-    return hr;
-}
-
-//
 // Retrieves the 'negotiate' AuthPackage from the LSA. In this case, Kerberos
 // For more information on auth packages see this msdn page:
 // http://msdn.microsoft.com/library/default.asp?url=/library/en-us/secauthn/security/msv1_0_lm20_logon.asp
@@ -358,8 +338,7 @@ HRESULT RetrieveNegotiateAuthPackage(_Out_ ULONG *pulAuthPackage)
     if (SUCCEEDED(HRESULT_FROM_NT(status)))
     {
         ULONG ulAuthPackage;
-        LSA_STRING lsaszKerberosName;
-        _LsaInitString(&lsaszKerberosName, NEGOSSP_NAME_A);
+        LSA_STRING lsaszKerberosName = { sizeof(NEGOSSP_NAME_A) - 1, sizeof(NEGOSSP_NAME_A), const_cast<PCHAR>(NEGOSSP_NAME_A) };
 
         status = LsaLookupAuthenticationPackage(hLsa, &lsaszKerberosName, &ulAuthPackage);
         if (SUCCEEDED(HRESULT_FROM_NT(status)))
@@ -381,98 +360,41 @@ HRESULT RetrieveNegotiateAuthPackage(_Out_ ULONG *pulAuthPackage)
     return hr;
 }
 
-//
-// Return a copy of pwzToProtect encrypted with the CredProtect API.
-//
-// pwzToProtect must not be NULL or the empty string.
-//
-static HRESULT _ProtectAndCopyString(
-    _In_ PCWSTR pwzToProtect,
-    _Outptr_result_nullonfailure_ PWSTR *ppwzProtected
-    )
+// CredProtect-encrypts the local password into a CoTaskMem string the caller frees with CoTaskMemFreeSecureString.
+// The service always supplies 1..64 characters (WeldapParseReply), so there is no empty case; the sample's
+// CredUI and already-encrypted (Terminal Services) paths cannot reach this provider and are gone. CredProtectW
+// declares its input non-const but only reads it, so the password is passed as it is: no extra plaintext copy.
+HRESULT ProtectAndCopyPassword(_In_ PCWSTR pwzPassword, _Outptr_result_nullonfailure_ PWSTR *ppwzProtected)
 {
     *ppwzProtected = nullptr;
-
-    // pwzToProtect is const, but CredProtect takes a non-const string.
-    // So, make a copy that we know isn't const.
-    PWSTR pwzToProtectCopy;
-    HRESULT hr = SHStrDupW(pwzToProtect, &pwzToProtectCopy);
-    if (SUCCEEDED(hr))
+    PWSTR pwz = const_cast<PWSTR>(pwzPassword);
+    DWORD cchIn = static_cast<DWORD>(wcslen(pwz)) + 1;   // CredProtect counts the terminator
+    // The first call only sizes the output: with no buffer it must fail with ERROR_INSUFFICIENT_BUFFER.
+    DWORD cchProtected = 0;
+    if (CredProtectW(FALSE, pwz, cchIn, nullptr, &cchProtected, nullptr))
     {
-        // The first call to CredProtect determines the length of the encrypted string.
-        // Because we pass a NULL output buffer, we expect the call to fail.
-        //
-        // Note that the third parameter to CredProtect, the number of characters of pwzToProtectCopy
-        // to encrypt, must include the NULL terminator!
-        DWORD cchProtected = 0;
-        if (!CredProtectW(FALSE, pwzToProtectCopy, (DWORD)wcslen(pwzToProtectCopy)+1, nullptr, &cchProtected, nullptr))
-        {
-            DWORD dwErr = GetLastError();
-
-            if ((ERROR_INSUFFICIENT_BUFFER == dwErr) && (0 < cchProtected))
-            {
-                // Allocate a buffer long enough for the encrypted string.
-                const DWORD cbProtectedAlloc = cchProtected * sizeof(wchar_t);
-                PWSTR pwzProtected = (PWSTR)CoTaskMemAlloc(cbProtectedAlloc);
-                if (pwzProtected)
-                {
-                    // The second call to CredProtect actually encrypts the string.
-                    if (CredProtectW(FALSE, pwzToProtectCopy, (DWORD)wcslen(pwzToProtectCopy)+1, pwzProtected, &cchProtected, nullptr))
-                    {
-                        *ppwzProtected = pwzProtected;
-                        hr = S_OK;
-                    }
-                    else
-                    {
-                        dwErr = GetLastError();
-                        SecureZeroMemory(pwzProtected, cbProtectedAlloc);
-                        CoTaskMemFree(pwzProtected);
-
-                        hr = HRESULT_FROM_WIN32(dwErr);
-                    }
-                }
-                else
-                {
-                    hr = E_OUTOFMEMORY;
-                }
-            }
-            else
-            {
-                hr = HRESULT_FROM_WIN32(dwErr);
-            }
-        }
-        else
-        {
-            hr = E_UNEXPECTED;
-        }
-
-        CoTaskMemFreeSecureString(pwzToProtectCopy);
+        return E_UNEXPECTED;
     }
-
-    return hr;
-}
-
-//
-// Return the local password encrypted with CredProtect, or -- for an empty password, which
-// needs no encryption -- a copy of the empty string.
-//
-HRESULT ProtectIfNecessaryAndCopyPassword(
-    _In_ PCWSTR pwzPassword,
-    _Outptr_result_nullonfailure_ PWSTR *ppwzProtectedPassword
-    )
-{
-    *ppwzProtectedPassword = nullptr;
-
-    // _ProtectAndCopyString is for non-empty strings only; an empty password needs no encryption.
-    // WELDAP: the sample's CredUI and already-encrypted (Terminal Services SetSerialization) handling is
-    // gone -- neither can reach this provider, since SetUsageScenario accepts only logon/unlock and
-    // SetSerialization returns E_NOTIMPL -- so the local password is always freshly CredProtect-encrypted.
-    if (pwzPassword && *pwzPassword)
+    DWORD dwErr = GetLastError();
+    if (dwErr != ERROR_INSUFFICIENT_BUFFER || cchProtected == 0)
     {
-        return _ProtectAndCopyString(pwzPassword, ppwzProtectedPassword);
+        return dwErr != ERROR_SUCCESS ? HRESULT_FROM_WIN32(dwErr) : E_UNEXPECTED;   // never S_OK without output
     }
-
-    return SHStrDupW(L"", ppwzProtectedPassword);
+    const DWORD cbProtected = cchProtected * sizeof(wchar_t);
+    PWSTR pwzProtected = static_cast<PWSTR>(CoTaskMemAlloc(cbProtected));
+    if (pwzProtected == nullptr)
+    {
+        return E_OUTOFMEMORY;
+    }
+    if (!CredProtectW(FALSE, pwz, cchIn, pwzProtected, &cchProtected, nullptr))
+    {
+        HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
+        SecureZeroMemory(pwzProtected, cbProtected);
+        CoTaskMemFree(pwzProtected);
+        return hr;
+    }
+    *ppwzProtected = pwzProtected;
+    return S_OK;
 }
 
 //

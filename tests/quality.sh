@@ -10,6 +10,7 @@
 #   - paranoia    no secret can reach a log, at any level          (tests/lint/paranoia.sh)
 #   - budget      per-component code-size budget                   (tests/lint/budget.py)
 #   - protocol    pipe/seal constants agree across C++/C#/Rust     (tests/surface/protocol-consistency.py)
+#   - installer   the MSI source is well-formed and keeps its safety properties (tests/lint/installer.py)
 #   - shellcheck  every shell script, pinned linter, in Docker
 #   - client      C#: build (warnings=errors), format, tests, Weldap.Core 100/100 coverage  (client/check.sh)
 #   - server      Rust: unsafe confinement, fmt, clippy pedantic, tests, 100/100 coverage   (server/check.sh, Docker)
@@ -23,16 +24,16 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
-DEFAULT=(paranoia budget protocol shellcheck client server imports)
-QUICK=(paranoia budget protocol)
-KNOWN="paranoia budget protocol shellcheck client server deny imports"
+DEFAULT=(paranoia budget protocol installer shellcheck client server imports)
+QUICK=(paranoia budget protocol installer)
+KNOWN="paranoia budget protocol installer shellcheck client server deny imports"
 
 selected=()
 for arg in "$@"; do
     case "$arg" in
         --fast) selected+=("${QUICK[@]}") ;;
-        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
-        paranoia|budget|protocol|shellcheck|client|server|deny|imports) selected+=("$arg") ;;
+        -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+        paranoia|budget|protocol|installer|shellcheck|client|server|deny|imports) selected+=("$arg") ;;
         *) echo "unknown gate '$arg' (known: $KNOWN)" >&2; exit 2 ;;
     esac
 done
@@ -43,6 +44,7 @@ done
 gate_paranoia() { tests/lint/paranoia.sh; }
 gate_budget()   { python3 -I tests/lint/budget.py; }
 gate_protocol() { python3 -I tests/surface/protocol-consistency.py; }
+gate_installer() { python3 -I tests/lint/installer.py; }
 gate_client()   { client/check.sh; }
 gate_server()   { server/check.sh; }
 

@@ -17,9 +17,9 @@
 
 #include <windows.h>
 #include <strsafe.h>
-#include <shlguid.h>
-#include <propkey.h>
+#include <shlguid.h>   // the CPFG_* field GUIDs used in common.h
 #include "common.h"
+#include "../Weldap.Shared/WeldapProtocol.h"   // WELDAP_MAX_UUN_CHARS
 #include "dll.h"
 #include "resource.h"
 
@@ -101,6 +101,7 @@ public:
 
     void _ClearPassword();
     void _SetStatusText(_In_ PCWSTR pwz);
+    void _ShowConsent(_In_opt_ PCWSTR pwzOfferedUun);
     HRESULT _BuildSerialization(_In_ PCWSTR pwzUun, _In_ PCWSTR pwzLocalPassword,
                                 _Out_ CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION *pcpcs);
 
@@ -110,4 +111,10 @@ public:
     FIELD_STATE_PAIR                        _rgFieldStatePairs[PFI_NUM_FIELDS];             // An array holding the state of each field in the tile.
     PWSTR                                   _rgFieldStrings[PFI_NUM_FIELDS];                // An array holding the string value of each field.
     ICredentialProviderCredentialEvents     *_pCredProvCredentialEvents;                    // Used to update fields.
+    // Adoption consent (PROTOCOL.md). The offer is bound to the (normalised) name the service answered "adopt"
+    // for: the Continue box is shown only then, can be ticked only while shown, is withdrawn when the name changes
+    // to another one or the tile is deselected, and consent is sent only for that same name -- whatever order
+    // LogonUI calls in, consent is only ever sent for the account the user was warned about.
+    bool                                    _fConsent;
+    wchar_t                                 _wzOfferedUun[WELDAP_MAX_UUN_CHARS + 1];   // "" = no offer
 };

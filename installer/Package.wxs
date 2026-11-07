@@ -3,36 +3,78 @@
   WELDAP MSI (FR-14): installs the service and credential provider and writes the config key,
   locked to SYSTEM + Administrators (SR-10). Deployment-neutral: the server's address and keys come from
   the command line (see installer/fleet/ for a deployment's values), e.g.
-    msiexec /i Weldap-x64.msi /qn SERVERHOST=weldap.example.org SERVERPINS=<base64 SHA-256 of its TLS key>
+    msiexec /i Weldap-x64.msi /qn /norestart SERVERHOST=weldap.example.org SERVERPINS=<base64 SHA-256 of its TLS key>
         SERVERKEY=<base64 HPKE public key> SERVERKEYID=k1 EXCLUDEDACCOUNTS="administrator,breakglass"
   The device certificate comes later, from installer/fleet/register-device.ps1.
-  Uninstall removes the binaries, service, provider registration and config; local accounts,
+
+  Upgrades and repairs are safe to repeat:
+  - Any rebuild upgrades in place (same version included), as one transaction: if the new install fails, the
+    old one is rolled back, never left half-removed.
+  - Every setting is remembered from the registry: an upgrade or repair needs no properties, and a property
+    given on the command line wins. Per-device state (local passwords, offline verifiers, the policy values set
+    by hand) is never touched by an upgrade or repair.
+  - The provider DLL's file name carries its hash, so an upgrade while LogonUI holds the old DLL (a PC at the
+    logon screen) writes the new one beside it instead of deferring it to a reboot.
+  Uninstall removes the binaries, service, provider registration and all of HKLM\SOFTWARE\WELDAP; local accounts,
   the WELDAP-Managed group and profiles stay (the service creates WELDAP-Managed on first start).
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Package Name="WELDAP" Manufacturer="WELDAP" Version="$(var.ProductVersion)"
            UpgradeCode="EFF70307-E41B-42C1-8CAD-AB4A058A9BD4" Scope="perMachine" InstallerVersion="500">
-    <MajorUpgrade DowngradeErrorMessage="A newer version of WELDAP is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of WELDAP is already installed." />
     <MediaTemplate EmbedCab="yes" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- The x64 package must not land on ARM64 Windows (which accepts x64 packages): ARM64 LogonUI cannot load an
+         x64 provider, so the tile would silently never appear. -->
+    <util:QueryNativeMachine />
+<?if $(sys.BUILDARCH) = x64 ?>
+    <Launch Condition="Installed OR NOT WIX_NATIVE_MACHINE OR WIX_NATIVE_MACHINE &lt;&gt; 43620"
+            Message="This is the x64 WELDAP package and this PC is ARM64: install Weldap-arm64.msi." />
+<?endif?>
 
     <!-- Required per deployment. The device knows only the WELDAP server: where it is, the pin of its TLS key (the
-         only server trust: no CA), and its PUBLIC password key (HPKE, P-256, base64). Nothing about the directory. -->
-    <Property Id="SERVERHOST" Secure="yes" />
-    <Property Id="SERVERPINS" Secure="yes" />
-    <Property Id="SERVERKEY" Secure="yes" />
-    <Property Id="SERVERKEYID" Secure="yes" />
+         only server trust: no CA), and its PUBLIC password key (HPKE, P-256, base64). Nothing about the directory.
+         Each setting: the command line, else what is in the registry already (REMEMBERED_*), else the default.
+         None is Secure: only an administrator or SYSTEM (every real deployment) can hand a property to this
+         per-machine install, never a standard user starting a repair: a SERVERHOST/SERVERKEY of theirs would send
+         every password to their server. The install folder's id is private for the same reason (a folder the user
+         chooses could have an ACL that lets users replace a SYSTEM binary). -->
+    <Property Id="REMEMBERED_SERVERHOST"><RegistrySearch Id="RemServerHost" Root="HKLM" Key="SOFTWARE\WELDAP" Name="ServerHost" Type="raw" Bitness="always64" /></Property>
+    <Property Id="REMEMBERED_SERVERPINS"><RegistrySearch Id="RemServerPins" Root="HKLM" Key="SOFTWARE\WELDAP" Name="ServerPins" Type="raw" Bitness="always64" /></Property>
+    <Property Id="REMEMBERED_SERVERKEY"><RegistrySearch Id="RemServerKey" Root="HKLM" Key="SOFTWARE\WELDAP" Name="ServerKey" Type="raw" Bitness="always64" /></Property>
+    <Property Id="REMEMBERED_SERVERKEYID"><RegistrySearch Id="RemServerKeyId" Root="HKLM" Key="SOFTWARE\WELDAP" Name="ServerKeyId" Type="raw" Bitness="always64" /></Property>
+    <Property Id="REMEMBERED_SERVERPORT"><RegistrySearch Id="RemServerPort" Root="HKLM" Key="SOFTWARE\WELDAP" Name="ServerPort" Type="raw" Bitness="always64" /></Property>
+    <Property Id="REMEMBERED_EXCLUDEDACCOUNTS"><RegistrySearch Id="RemExcluded" Root="HKLM" Key="SOFTWARE\WELDAP" Name="ExcludedAccounts" Type="raw" Bitness="always64" /></Property>
+    <Property Id="REMEMBERED_MAXOFFLINEDAYS"><RegistrySearch Id="RemMaxOffline" Root="HKLM" Key="SOFTWARE\WELDAP" Name="MaxOfflineDays" Type="raw" Bitness="always64" /></Property>
+    <Property Id="REMEMBERED_OFFLINEMAXFAILURES"><RegistrySearch Id="RemOfflineFailures" Root="HKLM" Key="SOFTWARE\WELDAP" Name="OfflineMaxFailures" Type="raw" Bitness="always64" /></Property>
+    <Property Id="REMEMBERED_TILELABEL"><RegistrySearch Id="RemTileLabel" Root="HKLM" Key="SOFTWARE\WELDAP" Name="TileLabel" Type="raw" Bitness="always64" /></Property>
+    <SetProperty Id="SERVERHOST" Value="[REMEMBERED_SERVERHOST]" After="AppSearch" Sequence="both" Condition="NOT SERVERHOST AND REMEMBERED_SERVERHOST" />
+    <SetProperty Id="SERVERPINS" Value="[REMEMBERED_SERVERPINS]" After="AppSearch" Sequence="both" Condition="NOT SERVERPINS AND REMEMBERED_SERVERPINS" />
+    <SetProperty Id="SERVERKEY" Value="[REMEMBERED_SERVERKEY]" After="AppSearch" Sequence="both" Condition="NOT SERVERKEY AND REMEMBERED_SERVERKEY" />
+    <SetProperty Id="SERVERKEYID" Value="[REMEMBERED_SERVERKEYID]" After="AppSearch" Sequence="both" Condition="NOT SERVERKEYID AND REMEMBERED_SERVERKEYID" />
+    <SetProperty Id="SERVERPORT" Value="[REMEMBERED_SERVERPORT]" After="AppSearch" Sequence="both" Condition="NOT SERVERPORT AND REMEMBERED_SERVERPORT" />
+    <SetProperty Id="EXCLUDEDACCOUNTS" Value="[REMEMBERED_EXCLUDEDACCOUNTS]" After="AppSearch" Sequence="both" Condition="NOT EXCLUDEDACCOUNTS AND REMEMBERED_EXCLUDEDACCOUNTS" />
+    <SetProperty Id="MAXOFFLINEDAYS" Value="[REMEMBERED_MAXOFFLINEDAYS]" After="AppSearch" Sequence="both" Condition="NOT MAXOFFLINEDAYS AND REMEMBERED_MAXOFFLINEDAYS" />
+    <SetProperty Id="OFFLINEMAXFAILURES" Value="[REMEMBERED_OFFLINEMAXFAILURES]" After="AppSearch" Sequence="both" Condition="NOT OFFLINEMAXFAILURES AND REMEMBERED_OFFLINEMAXFAILURES" />
+    <SetProperty Id="TILELABEL" Value="[REMEMBERED_TILELABEL]" After="AppSearch" Sequence="both" Condition="NOT TILELABEL AND REMEMBERED_TILELABEL" />
+    <SetProperty Action="DefaultServerPort" Id="SERVERPORT" Value="636" After="SetSERVERPORT" Sequence="both" Condition="NOT SERVERPORT" />
+    <SetProperty Action="DefaultExcluded" Id="EXCLUDEDACCOUNTS" Value="administrator" After="SetEXCLUDEDACCOUNTS" Sequence="both" Condition="NOT EXCLUDEDACCOUNTS" />
+    <SetProperty Action="DefaultMaxOffline" Id="MAXOFFLINEDAYS" Value="180" After="SetMAXOFFLINEDAYS" Sequence="both" Condition="NOT MAXOFFLINEDAYS" />
+    <SetProperty Action="DefaultOfflineFailures" Id="OFFLINEMAXFAILURES" Value="10" After="SetOFFLINEMAXFAILURES" Sequence="both" Condition="NOT OFFLINEMAXFAILURES" />
+    <SetProperty Action="DefaultTileLabel" Id="TILELABEL" Value="WELDAP sign-in" After="SetTILELABEL" Sequence="both" Condition="NOT TILELABEL" />
+    <!-- REINSTALL (a settings change, see docs/CONFIGURATION.md) only means something to the build that is installed.
+         Given to a different build, Windows Installer finds nothing of it to reinstall, costs every feature out and
+         treats the session as a removal (it sets REMOVE=ALL itself): refuse that rather than run it. -->
+    <Launch Condition="NOT REINSTALL OR Installed"
+            Message="REINSTALL applies to the WELDAP build that is installed, and this MSI is a different build. Install it without REINSTALL to upgrade (settings are kept), or use the installed MSI." />
     <Launch Condition="Installed OR (SERVERHOST AND SERVERPINS AND SERVERKEY AND SERVERKEYID)"
             Message="WELDAP needs SERVERHOST, SERVERPINS, SERVERKEY and SERVERKEYID on the msiexec command line." />
 
-    <Property Id="SERVERPORT" Value="636" Secure="yes" />
-    <Property Id="EXCLUDEDACCOUNTS" Value="administrator" Secure="yes" />
-    <Property Id="MAXOFFLINEDAYS" Value="180" Secure="yes" />
-    <Property Id="OFFLINEMAXFAILURES" Value="10" Secure="yes" />
-    <Property Id="TILELABEL" Value="WELDAP sign-in" Secure="yes" />
-
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="WELDAP" />
+      <Directory Id="InstallDir" Name="WELDAP" />
     </StandardDirectory>
 
     <Feature Id="Main" Title="WELDAP">
@@ -42,7 +84,7 @@
       <ComponentRef Id="Config" />
     </Feature>
 
-    <Component Id="Service" Directory="INSTALLFOLDER">
+    <Component Id="Service" Directory="InstallDir">
       <File Id="ServiceExe" Source="$(var.ServiceDir)\WeldapService.exe" KeyPath="yes" />
       <!-- FR-13: Event Viewer reads the event text through this message DLL. -->
       <File Id="EventLogMessagesDll" Source="$(var.ServiceDir)\System.Diagnostics.EventLog.Messages.dll" />
@@ -56,8 +98,9 @@
       <ServiceControl Id="ServiceControl" Name="Weldap" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
     </Component>
 
-    <Component Id="Provider" Directory="INSTALLFOLDER">
-      <File Id="ProviderDll" Source="$(var.ProviderDir)\WeldapCredentialProvider.dll" KeyPath="yes" />
+    <Component Id="Provider" Directory="InstallDir">
+      <File Id="ProviderDll" Name="WeldapCredentialProvider-$(var.ProviderTag).dll"
+            Source="$(var.ProviderDir)\WeldapCredentialProvider.dll" KeyPath="yes" />
       <RegistryKey Root="HKLM"
                    Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$(var.ProviderClsid)">
         <RegistryValue Type="string" Value="WeldapCredentialProvider" />
@@ -72,22 +115,29 @@
     </Component>
 
     <!-- The elevated local account manager (weldapadm). Ships beside the service so the integrity pin applies. -->
-    <Component Id="AdminCli" Directory="INSTALLFOLDER">
+    <Component Id="AdminCli" Directory="InstallDir">
       <File Id="AdminExe" Source="$(var.AdminDir)\weldapadm.exe" KeyPath="yes" />
     </Component>
 
-    <Component Id="Config" Directory="INSTALLFOLDER">
-      <RegistryKey Root="HKLM" Key="SOFTWARE\WELDAP" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
+    <!-- The config key. Only the values below belong to the MSI: the Secret subkey and the policy values set by
+         hand (AdoptPreexisting, LockdownEnforce, IdleDisableDays) are the device's, and survive upgrades and
+         repairs. Everything is authored as Type="string" so that a remembered value round-trips exactly: a number
+         comes back from the registry as "#636" (msiexec's raw form, written back as the REG_DWORD it was) and a typed
+         one stays the string "636"; a list comes back as "[~]a[~]b[~]" (written back as the REG_MULTI_SZ it was) and
+         a typed "a,b" stays one string. (Type="multiString" would wrap a remembered list in another [~]...[~] on each
+         upgrade, and the empty entries that adds end the list early.) The service reads every one of these forms. -->
+    <Component Id="Config" Directory="InstallDir">
+      <RegistryKey Root="HKLM" Key="SOFTWARE\WELDAP" ForceCreateOnInstall="yes">
         <!-- SR-10: owner Administrators; full control SYSTEM + Administrators; read for Users. -->
         <PermissionEx Sddl="O:BAG:SYD:PAI(A;CI;KA;;;SY)(A;CI;KA;;;BA)(A;CI;KR;;;BU)" />
         <RegistryValue Name="ServerHost" Type="string" Value="[SERVERHOST]" KeyPath="yes" />
-        <RegistryValue Name="ServerPort" Type="integer" Value="[SERVERPORT]" />
-        <RegistryValue Name="ServerPins" Type="multiString" Value="[SERVERPINS]" />
+        <RegistryValue Name="ServerPort" Type="string" Value="[SERVERPORT]" />
+        <RegistryValue Name="ServerPins" Type="string" Value="[SERVERPINS]" />
         <RegistryValue Name="ServerKey" Type="string" Value="[SERVERKEY]" />
         <RegistryValue Name="ServerKeyId" Type="string" Value="[SERVERKEYID]" />
-        <RegistryValue Name="ExcludedAccounts" Type="multiString" Value="[EXCLUDEDACCOUNTS]" />
-        <RegistryValue Name="MaxOfflineDays" Type="integer" Value="[MAXOFFLINEDAYS]" />
-        <RegistryValue Name="OfflineMaxFailures" Type="integer" Value="[OFFLINEMAXFAILURES]" />
+        <RegistryValue Name="ExcludedAccounts" Type="string" Value="[EXCLUDEDACCOUNTS]" />
+        <RegistryValue Name="MaxOfflineDays" Type="string" Value="[MAXOFFLINEDAYS]" />
+        <RegistryValue Name="OfflineMaxFailures" Type="string" Value="[OFFLINEMAXFAILURES]" />
         <RegistryValue Name="TileLabel" Type="string" Value="[TILELABEL]" />
         <!-- Anti-tamper: SHA-256 of the (signed) binaries shipped in this MSI; the service checks each on disk
              against its pin and refuses to start on any mismatch. -->
@@ -97,5 +147,31 @@
         <!-- Per-account secrets go in HKLM\SOFTWARE\WELDAP\Secret (SYSTEM only), created by the service. -->
       </RegistryKey>
     </Component>
+
+    <!-- The service exits with a non-zero code on any fault (Program.cs): apply the restarts above to that too, not
+         only to a crash, or a fault would leave WELDAP sign-in down until someone noticed. (sc.exe, because the MSI
+         table for this is documented not to work, and util:ServiceConfig has no such option.) -->
+    <SetProperty Id="SetWeldapFailureFlag" Value="&quot;[System64Folder]sc.exe&quot; failureflag Weldap 1"
+                 Before="SetWeldapFailureFlag" Sequence="execute" />
+    <CustomAction Id="SetWeldapFailureFlag" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- A real uninstall (not the removal of the old version during an upgrade) clears everything WELDAP kept on
+         the device: the config key, the Secret subkey with its local passwords and offline verifiers, and the
+         policy values set by hand. -->
+    <SetProperty Id="PurgeWeldapState" Value="&quot;[System64Folder]reg.exe&quot; delete HKLM\SOFTWARE\WELDAP /f /reg:64"
+                 Before="PurgeWeldapState" Sequence="execute" />
+    <!-- Execute="commit": only once the uninstall has succeeded, never before a rollback that would bring WELDAP
+         back with its state gone. (Windows skips commit actions when rollback is disabled by policy; the key is
+         then left behind, which is the safe side.) -->
+    <CustomAction Id="PurgeWeldapState" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixQuietExec"
+                  Execute="commit" Impersonate="no" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="SetWeldapFailureFlag" After="InstallServices" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <!-- Installed: this product is really on the device and being removed. REMOVE=ALL alone is not enough: Windows
+           Installer also sets it in a session that installs nothing (see the REINSTALL launch condition). -->
+      <Custom Action="PurgeWeldapState" After="RemoveRegistryValues"
+              Condition="Installed AND REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
   </Package>
 </Wix>

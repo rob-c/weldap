@@ -221,4 +221,14 @@ public class RateLimiterTests
         });
         Assert.InRange(limiter.Tracked, 0, 50);
     }
+
+    /// <summary>A boot-time clock stepped back by NTP lifts a block instead of stretching it by the step.</summary>
+    [Fact]
+    public void A_clock_stepped_backwards_lifts_the_block()
+    {
+        for (var i = 0; i < RateLimiter.MaxFailures; i++) _limiter.RecordFailure("alice");
+        Assert.True(_limiter.IsBlocked("alice"));
+        _clock.UtcNow -= TimeSpan.FromHours(6);
+        Assert.False(_limiter.IsBlocked("alice"));
+    }
 }

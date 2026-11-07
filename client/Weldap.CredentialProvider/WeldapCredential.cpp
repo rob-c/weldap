@@ -31,11 +31,15 @@ static const wchar_t c_wzDenied[]             = L"Sign-in was refused.";
 static const wchar_t c_wzServiceError[]       = L"The login service reported an error.";
 static const wchar_t c_wzInternalError[]      = L"Sign-in failed. Please try again.";
 static const wchar_t c_wzNotConfigured[]      = L"This PC isn't set up for WELDAP sign-in. Contact IT.";
+static const wchar_t c_wzAdoptOffer[]         = L"This PC already has a local account with this name. Tick Continue and sign in again to use it with your network sign-in.";
+static const wchar_t c_wzConsentLabel[]       = L"Continue: use the existing account with my network sign-in";
 
 CWeldapCredential::CWeldapCredential():
     _cRef(1),
     _cpus(CPUS_INVALID),
-    _pCredProvCredentialEvents(nullptr)
+    _pCredProvCredentialEvents(nullptr),
+    _fConsent(false),
+    _wzOfferedUun()
 {
     DllAddRef();
 
@@ -166,10 +170,11 @@ HRESULT CWeldapCredential::SetSelected(_Out_ BOOL *pbAutoLogon)
     return S_OK;
 }
 
-// The tile is no longer selected: wipe the password.
+// The tile is no longer selected: wipe the password, and withdraw any adoption offer.
 HRESULT CWeldapCredential::SetDeselected()
 {
     _ClearPassword();
+    _ShowConsent(nullptr);
     return S_OK;
 }
 
@@ -181,6 +186,24 @@ void CWeldapCredential::_ClearPassword()
     if (SUCCEEDED(SHStrDupW(L"", &_rgFieldStrings[PFI_PASSWORD])) && _pCredProvCredentialEvents)
     {
         _pCredProvCredentialEvents->SetFieldString(this, PFI_PASSWORD, _rgFieldStrings[PFI_PASSWORD]);
+    }
+}
+
+// Offers adoption of pwzOfferedUun (after an "adopt" reply for it) or, with nullptr, withdraws any offer. Either
+// way the Continue box starts unticked.
+void CWeldapCredential::_ShowConsent(_In_opt_ PCWSTR pwzOfferedUun)
+{
+    bool fShow = pwzOfferedUun != nullptr && SUCCEEDED(StringCchCopyW(_wzOfferedUun, ARRAYSIZE(_wzOfferedUun), pwzOfferedUun));
+    if (!fShow)
+    {
+        _wzOfferedUun[0] = L'\0';
+    }
+    _fConsent = false;
+    _rgFieldStatePairs[PFI_CONSENT].cpfs = fShow ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN;
+    if (_pCredProvCredentialEvents)
+    {
+        _pCredProvCredentialEvents->SetFieldCheckbox(this, PFI_CONSENT, FALSE, c_wzConsentLabel);
+        _pCredProvCredentialEvents->SetFieldState(this, PFI_CONSENT, _rgFieldStatePairs[PFI_CONSENT].cpfs);
     }
 }
 
@@ -301,6 +324,14 @@ HRESULT CWeldapCredential::SetStringValue(DWORD dwFieldID, _In_ PCWSTR pwz)
         }
         *ppwszStored = nullptr;
         hr = SHStrDupW(pwz != nullptr ? pwz : L"", ppwszStored);
+        // Consent was offered for one name only: a different name withdraws the offer (the same name, typed or
+        // pushed again, does not).
+        wchar_t wzUun[WELDAP_MAX_UUN_CHARS + 1];
+        if (dwFieldID == PFI_UUN && _wzOfferedUun[0] != L'\0' &&
+            (FAILED(WeldapNormalizeUun(*ppwszStored, wzUun, ARRAYSIZE(wzUun))) || wcscmp(wzUun, _wzOfferedUun) != 0))
+        {
+            _ShowConsent(nullptr);
+        }
     }
     else
     {
@@ -310,17 +341,27 @@ HRESULT CWeldapCredential::SetStringValue(DWORD dwFieldID, _In_ PCWSTR pwz)
     return hr;
 }
 
-// No checkboxes, combo boxes or command links on this tile.
-HRESULT CWeldapCredential::GetCheckboxValue(DWORD /*dwFieldID*/, _Out_ BOOL *pbChecked, _Outptr_result_nullonfailure_ PWSTR *ppwszLabel)
+// The one checkbox: adoption consent (PFI_CONSENT). No combo boxes or command links on this tile.
+HRESULT CWeldapCredential::GetCheckboxValue(DWORD dwFieldID, _Out_ BOOL *pbChecked, _Outptr_result_nullonfailure_ PWSTR *ppwszLabel)
 {
     *pbChecked = FALSE;
     *ppwszLabel = nullptr;
-    return E_NOTIMPL;
+    if (dwFieldID != PFI_CONSENT)
+    {
+        return E_INVALIDARG;
+    }
+    *pbChecked = _fConsent ? TRUE : FALSE;
+    return SHStrDupW(c_wzConsentLabel, ppwszLabel);
 }
 
-HRESULT CWeldapCredential::SetCheckboxValue(DWORD /*dwFieldID*/, BOOL /*bChecked*/)
+HRESULT CWeldapCredential::SetCheckboxValue(DWORD dwFieldID, BOOL bChecked)
 {
-    return E_NOTIMPL;
+    if (dwFieldID != PFI_CONSENT)
+    {
+        return E_INVALIDARG;
+    }
+    _fConsent = bChecked != FALSE && _wzOfferedUun[0] != L'\0';   // a hidden box cannot be ticked
+    return S_OK;
 }
 
 HRESULT CWeldapCredential::GetComboBoxValueCount(DWORD /*dwFieldID*/, _Out_ DWORD *pcItems, _Deref_out_range_(<, *pcItems) _Out_ DWORD *pdwSelectedItem)
@@ -376,7 +417,7 @@ HRESULT CWeldapCredential::_BuildSerialization(_In_ PCWSTR pwzUun, _In_ PCWSTR p
     }
 
     PWSTR pwzProtectedPassword = nullptr;
-    hr = ProtectIfNecessaryAndCopyPassword(pwzLocalPassword, &pwzProtectedPassword);
+    hr = ProtectAndCopyPassword(pwzLocalPassword, &pwzProtectedPassword);
     if (SUCCEEDED(hr))
     {
         // We use KERB_INTERACTIVE_UNLOCK_LOGON in both unlock and logon scenarios. It contains a
@@ -451,6 +492,8 @@ HRESULT CWeldapCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
     wchar_t wzMessage[WELDAP_MAX_REPLY_MESSAGE_CHARS + 1];
     wzMessage[0] = L'\0';
     bool fSerialized = false;
+    bool fOfferConsent = false;
+    bool fAsked = false;   // the request reached the service (only its answer can change the adoption offer)
 
     wchar_t wzUun[WELDAP_MAX_UUN_CHARS + 1];
     PCWSTR pwzPassword = _rgFieldStrings[PFI_PASSWORD] ? _rgFieldStrings[PFI_PASSWORD] : L"";
@@ -485,7 +528,11 @@ HRESULT CWeldapCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         else
         {
             WELDAP_REPLY reply;
-            WELDAP_CLIENT_STATUS status = WeldapAuthenticate(_cpus == CPUS_UNLOCK_WORKSTATION, wzUun, &sealed, &reply);
+            bool fConsent = _fConsent && wcscmp(wzUun, _wzOfferedUun) == 0;
+            BYTE bFlags = static_cast<BYTE>((_cpus == CPUS_UNLOCK_WORKSTATION ? WELDAP_FLAG_SCENARIO_UNLOCK : 0) |
+                                            (fConsent ? WELDAP_FLAG_CONSENT : 0));
+            WELDAP_CLIENT_STATUS status = WeldapAuthenticate(bFlags, wzUun, &sealed, &reply);
+            fAsked = true;
             SecureZeroMemory(&sealed, sizeof(sealed));
             if (status == WELDAP_STATUS_REPLIED)
             {
@@ -503,6 +550,12 @@ HRESULT CWeldapCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
                     break;
                 case WELDAP_RESULT_VALUE_DENY:
                     SanitizeMessage(reply.message, c_wzDenied, wzMessage, ARRAYSIZE(wzMessage));
+                    break;
+                case WELDAP_RESULT_VALUE_ADOPT:
+                    // The password was right, but this name is a pre-existing local account: nothing has changed
+                    // yet. Show the service's warning and the Continue box; a resubmit with it ticked consents.
+                    SanitizeMessage(reply.message, c_wzAdoptOffer, wzMessage, ARRAYSIZE(wzMessage));
+                    fOfferConsent = true;
                     break;
                 default:
                     SanitizeMessage(reply.message, c_wzServiceError, wzMessage, ARRAYSIZE(wzMessage));
@@ -522,8 +575,14 @@ HRESULT CWeldapCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         }
     }
 
-    // The password field is wiped after every attempt (the serialization holds its own copy).
+    // The password field is wiped after every attempt (the serialization holds its own copy). Consent is good for
+    // one request only: once the service has answered, the box stays only if that answer was itself an adoption
+    // offer. A submit the tile refused itself (no password yet, say) leaves the offer as it was.
     _ClearPassword();
+    if (fAsked)
+    {
+        _ShowConsent(fOfferConsent ? wzUun : nullptr);
+    }
 
     if (fSerialized)
     {
@@ -535,7 +594,7 @@ HRESULT CWeldapCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         _SetStatusText(wzMessage);
         if (SUCCEEDED(SHStrDupW(wzMessage, ppwszOptionalStatusText)))
         {
-            *pcpsiOptionalStatusIcon = CPSI_ERROR;
+            *pcpsiOptionalStatusIcon = fOfferConsent ? CPSI_WARNING : CPSI_ERROR;
         }
         *pcpgsr = CPGSR_NO_CREDENTIAL_FINISHED;
     }
@@ -552,12 +611,14 @@ struct REPORT_RESULT_STATUS_INFO
 
 static const REPORT_RESULT_STATUS_INFO s_rgLogonStatusInfo[] =
 {
-    { STATUS_LOGON_FAILURE, STATUS_SUCCESS, L"Incorrect password or username.", CPSI_ERROR, },
+    // Windows only ever sees the account's local password, which the service set and supplied: a failure here
+    // means the account was changed outside WELDAP, not that the user mistyped (that is refused before this).
+    { STATUS_LOGON_FAILURE, STATUS_SUCCESS, L"This PC's account is out of step with WELDAP. Sign in again, or contact IT.", CPSI_ERROR, },
     { STATUS_ACCOUNT_RESTRICTION, STATUS_ACCOUNT_DISABLED, L"The account is disabled.", CPSI_WARNING },
 };
 
-// ReportResult lets us customise the message shown when Windows rejects the serialization
-// (e.g. offline result and a wrong password).
+// ReportResult lets us customise the message shown when Windows rejects the serialization (the local account
+// was disabled, expired or had its password changed by hand since the service vouched for it).
 HRESULT CWeldapCredential::ReportResult(NTSTATUS ntsStatus,
                                      NTSTATUS ntsSubstatus,
                                      _Outptr_result_maybenull_ PWSTR *ppwszOptionalStatusText,

@@ -26,8 +26,9 @@ public static class ServerTransport
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(request);
 
+        if (deadline <= TimeSpan.Zero) return ServerReply.NoAnswer("server: timeout"); // the budget is already spent
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        if (deadline > TimeSpan.Zero) cts.CancelAfter(deadline);
+        cts.CancelAfter(deadline);
         var token = cts.Token;
         try
         {

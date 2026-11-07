@@ -18,6 +18,10 @@ public class AuditFormatTests
     [InlineData(AuditKind.AdminAdded, AuditSeverity.Information)]
     [InlineData(AuditKind.AdminRemoved, AuditSeverity.Information)]
     [InlineData(AuditKind.CleanupRun, AuditSeverity.Information)]
+    // A guard that fired, or a lockdown candidate: someone should look.
+    [InlineData(AuditKind.WouldDisable, AuditSeverity.Warning)]
+    [InlineData(AuditKind.DisableSkipped, AuditSeverity.Warning)]
+    [InlineData(AuditKind.DemotionSkipped, AuditSeverity.Warning)]
     public void SeverityOf(AuditKind kind, AuditSeverity expected) => Assert.Equal(expected, AuditFormat.SeverityOf(kind));
 
     [Fact]

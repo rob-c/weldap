@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -11,9 +12,13 @@ namespace Weldap.Service;
 /// This device's only network peer: the WELDAP server, over TLS 1.2/1.3 with the device's registered
 /// certificate (SR-14). The server is trusted by its key pin alone (no CA, no name check), so no certificate
 /// authority can stand in for it. This class is the Windows-only shell — pick the device certificate, open the
-/// TCP socket (connect timeout, keep-alive) and the pinned TLS stream — and then hands the stream to
-/// <see cref="ServerTransport"/> (in Weldap.Core), which does the framing and turns every wire fault into
-/// "no answer" (the offline path). It carries the sealed password, which this process cannot open.
+/// TCP socket and the pinned TLS stream — and then hands the stream to <see cref="ServerTransport"/> (in
+/// Weldap.Core), which does the framing and turns every wire fault into "no answer" (the offline path). It
+/// carries the sealed password, which this process cannot open.
+///
+/// Every step is bounded by one budget (<see cref="LoginSettings.ServerBudgetSeconds"/>): a server that accepts
+/// TCP and then stalls -- a paused container, a path lost mid-handshake, a middlebox holding the connection --
+/// costs a sign-in at most that long, never the account lock and the pipe for the keep-alive horizon.
 /// </summary>
 internal sealed class ServerClient(LoginSettings settings) : IWeldapServer
 {
@@ -23,35 +28,21 @@ internal sealed class ServerClient(LoginSettings settings) : IWeldapServer
     public StatusSnapshot? ReadStatus(IReadOnlyCollection<string> uuns) =>
         ServerTransport.ToStatus(Exchange(ServerMessages.Status(uuns)), uuns);
 
-    /// <summary>Opens the pinned TLS stream and exchanges one framed request/reply over it.</summary>
+    /// <summary>Opens the pinned TLS stream and exchanges one framed request/reply over it, within the budget.</summary>
     private ServerReply Exchange(byte[] body)
     {
         using var cert = DeviceCertificate(out var why);
         if (cert is null) return ServerReply.NoAnswer(why);
 
         var serverOk = false;
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(LoginSettings.ServerBudgetSeconds));
         try
         {
-            using var tcp = new TcpClient();
-            tcp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-            if (!tcp.ConnectAsync(settings.ServerHost, settings.ServerPort)
-                    .Wait(TimeSpan.FromSeconds(LoginSettings.ConnectTimeoutSeconds)))
-                return ServerReply.NoAnswer("server: connect timeout");
-
-            using var tls = new SslStream(tcp.GetStream(), leaveInnerStreamOpen: false);
-            tls.AuthenticateAsClient(new SslClientAuthenticationOptions
-            {
-                TargetHost = settings.ServerHost,
-                ClientCertificates = [cert],
-                LocalCertificateSelectionCallback = (_, _, _, _, _) => cert,
-                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-                RemoteCertificateValidationCallback = (_, certificate, _, _) =>
-                    serverOk = certificate is not null && ServerMessages.MatchesPin(certificate, settings.ServerPins),
-            });
-
-            return ServerTransport.ExchangeAsync(tls, body, TimeSpan.FromSeconds(LoginSettings.TimeoutSeconds),
-                CancellationToken.None).GetAwaiter().GetResult();
+            return ExchangeAsync(body, cert, ok => serverOk = ok, budget).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            return ServerReply.NoAnswer("server: timeout");
         }
         catch (AuthenticationException)
         {
@@ -64,6 +55,67 @@ internal sealed class ServerClient(LoginSettings settings) : IWeldapServer
             return ServerReply.NoAnswer($"server: {ex.GetType().Name}");
         }
 #pragma warning restore CA1031
+    }
+
+    private async Task<ServerReply> ExchangeAsync(byte[] body, X509Certificate2 cert, Action<bool> pinned, CancellationTokenSource budget)
+    {
+        using var tcp = await ConnectAsync(budget.Token).ConfigureAwait(false);
+        if (tcp is null) return ServerReply.NoAnswer("server: connect timeout");
+
+        using var tls = new SslStream(tcp.GetStream(), leaveInnerStreamOpen: false);
+        await tls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+        {
+            TargetHost = settings.ServerHost,
+            ClientCertificates = [cert],
+            LocalCertificateSelectionCallback = (_, _, _, _, _) => cert,
+            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+            RemoteCertificateValidationCallback = (_, certificate, _, _) =>
+            {
+                var ok = certificate is not null && ServerMessages.MatchesPin(certificate, settings.ServerPins);
+                pinned(ok);
+                return ok;
+            },
+        }, budget.Token).ConfigureAwait(false);
+
+        // The rest of the budget for the request and reply; a deadline here is "no answer" (ServerTransport).
+        return await ServerTransport.ExchangeAsync(tls, body, TimeSpan.FromSeconds(LoginSettings.ServerBudgetSeconds),
+            budget.Token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A connection to the first of the server's addresses that answers, or null. Each address gets its own
+    /// ConnectTimeoutSeconds (within the overall budget), so one that never answers -- an IPv6 black hole, a dead
+    /// node of a round-robin pair -- cannot use up the time before a working one is tried.
+    /// </summary>
+    private async Task<TcpClient?> ConnectAsync(CancellationToken budget)
+    {
+        var addresses = IPAddress.TryParse(settings.ServerHost, out var literal)
+            ? [literal]
+            : await Dns.GetHostAddressesAsync(settings.ServerHost, budget).ConfigureAwait(false);
+        foreach (var address in addresses)
+        {
+            var tcp = new TcpClient(address.AddressFamily);
+            var connected = false;
+            try
+            {
+                tcp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(budget);
+                attempt.CancelAfter(TimeSpan.FromSeconds(LoginSettings.ConnectTimeoutSeconds));
+                await tcp.ConnectAsync(address, settings.ServerPort, attempt.Token).ConfigureAwait(false);
+                connected = true;
+                return tcp;
+            }
+            catch (Exception ex) when (ex is SocketException || (ex is OperationCanceledException && !budget.IsCancellationRequested))
+            {
+                // This address does not answer: try the next.
+            }
+            finally
+            {
+                if (!connected) tcp.Dispose();
+            }
+        }
+        return null;
     }
 
     /// <summary>The newest currently valid LocalMachine\My certificate named "WELDAP device" (register-device.ps1)

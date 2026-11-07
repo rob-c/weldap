@@ -15,6 +15,8 @@
 // unlock screens only. This provider is not a filter and does not touch other providers,
 // so the stock password tile is always there.
 
+// Load-bearing: with <initguid.h> first, this file is where DEFINE_GUID instantiates CLSID_WeldapProvider (guid.h)
+// and the CPFG_* field GUIDs used in common.h. No other translation unit may include it.
 #include <initguid.h>
 #include "WeldapProvider.h"
 #include "WeldapCredential.h"

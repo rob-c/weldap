@@ -1,7 +1,9 @@
 <#
 .SYNOPSIS
-    TEST ONLY: builds WeldapClientTest.exe (native OS architecture) into .\out\ — links the
-    credential provider's WeldapClient.cpp and WeldapSeal.cpp, so they are tested as shipped.
+    TEST ONLY: builds into .\out\ (native OS architecture)
+    - WeldapClientTest.exe: links the credential provider's WeldapClient.cpp and WeldapSeal.cpp, so they are tested
+      as shipped;
+    - TileTest.exe: loads the installed provider DLL and drives its COM interfaces as LogonUI does (the tile code).
 #>
 param([ValidateSet('native', 'x64', 'arm64')] [string]$Arch = 'native')
 $ErrorActionPreference = 'Stop'
@@ -18,15 +20,18 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 # /analyze: MSVC code analysis over the harness and the provider sources it links; with /WX its warnings fail the build.
 $cl = "cl /nologo /std:c++17 /W4 /WX /sdl /analyze /EHsc /MT /O2 /guard:cf /DUNICODE /D_UNICODE /Fo`"$out\\`" /Fe`"$out\WeldapClientTest.exe`" " +
       "`"$PSScriptRoot\WeldapClientTest.cpp`" `"$src\WeldapClient.cpp`" `"$src\WeldapSeal.cpp`" advapi32.lib bcrypt.lib crypt32.lib /link /guard:cf"
+$clTile = "cl /nologo /std:c++17 /W4 /WX /EHsc /MT /O2 /guard:cf /DUNICODE /D_UNICODE /Fo`"$out\\`" /Fe`"$out\TileTest.exe`" " +
+      "`"$PSScriptRoot\TileTest.cpp`" ole32.lib uuid.lib user32.lib gdi32.lib advapi32.lib /link /guard:cf"
 # (Via a temporary .cmd file: Windows PowerShell 5.1 mangles quotes passed to cmd.exe /c.)
 $cmdFile = Join-Path $env:TEMP "ppecp-test-build-$PID.cmd"
 Set-Content -LiteralPath $cmdFile -Encoding ASCII -Value @(
     '@echo off'
     "call `"$devCmd`" -no_logo -arch=$target -host_arch=$hostArch || exit /b 1"
-    $cl
+    "$cl || exit /b 1"
+    $clTile
 )
 & cmd.exe /d /c $cmdFile
 $code = $LASTEXITCODE
 Remove-Item -LiteralPath $cmdFile -ErrorAction SilentlyContinue
 if ($code -ne 0) { throw "cl failed ($code)" }
-"built $out\WeldapClientTest.exe"
+"built $out\WeldapClientTest.exe and $out\TileTest.exe"

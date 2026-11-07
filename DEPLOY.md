@@ -208,10 +208,11 @@ holds a password).
 tile, build with `WELDAP_TILE_IMAGE=<square png/jpg/bmp>` (`docs/CONFIGURATION.md` §3). For production, sign the
 binaries and MSI (`docs/CONFIGURATION.md` §6).
 
-**Install** (as administrator; the four server values are required):
+**Install** (as administrator; the four server values are required). `Weldap-x64.msi` goes on x64 Windows,
+`Weldap-arm64.msi` on ARM64 Windows (the x64 MSI refuses to install on ARM64):
 
 ```powershell
-msiexec /i Weldap-x64.msi /qn `
+msiexec /i Weldap-x64.msi /qn /norestart /l*v C:\Windows\Temp\weldap-install.log `
   SERVERHOST=weldap.example.org `
   SERVERPINS=<pin from step 4> `
   SERVERKEY=<public key from step 4> `
@@ -239,9 +240,11 @@ Until a device is registered the server will not talk to it, and sign-in falls b
 install means no WELDAP sign-in yet). Optionally apply the lockout policy with
 `installer\fleet\set-lockout-policy.ps1`.
 
-**Moving an existing device to a new server:** uninstall the MSI and install it again with the new values (or
-change `ServerHost`/`ServerPort`/`ServerPins`/`ServerKey`/`ServerKeyId` under `HKLM\SOFTWARE\WELDAP` and
-`Restart-Service Weldap`), then register it with the new device CA. A certificate from another CA is refused.
+**Moving an existing device to a new server:** uninstall the MSI and install it again with the new values (an
+uninstall deletes all of `HKLM\SOFTWARE\WELDAP`, offline verifiers and hand-set policies included, so each user
+signs in online once), or change `ServerHost`/`ServerPort`/`ServerPins`/`ServerKey`/`ServerKeyId` under
+`HKLM\SOFTWARE\WELDAP` and `Restart-Service Weldap`; then register it with the new device CA. A certificate from
+another CA is refused.
 
 ## 9. Operate
 
@@ -251,6 +254,7 @@ change `ServerHost`/`ServerPort`/`ServerPins`/`ServerKey`/`ServerKeyId` under `H
 | Renew device certificates | re-run step 8's registration (`-NewRequest` … `-Accept`) | Before 90 days (`WELDAP_DEVICE_DAYS`) |
 | Cut a device off | `docker compose -f server/compose.yaml run --rm -T ca revoke <device>` | Lost/retired device; takes effect on its next connection |
 | List devices | `docker compose -f server/compose.yaml run --rm -T ca list` | Any time |
+| Upgrade devices | `msiexec /i Weldap-<arch>.msi /qn /norestart /l*v <log>`, no properties: settings, local passwords, offline verifiers and hand-set policies are kept (`docs/CONFIGURATION.md` §2) | Each new build; any rebuild upgrades in place |
 | Back up | the `weldap-ca` volume (CA key + database) and `/etc/weldap/secrets` | After `init` and after each registration |
 | Rotate the password key | add `k2` to `password_keys` (newest first), roll `SERVERKEY`/`SERVERKEYID` out, remove `k1` once unused | As policy requires (`server/README.md`) |
 | Watch | `docker compose -f server/compose.yaml logs server`: one JSON line per event, with device and username, never a password | Ongoing |

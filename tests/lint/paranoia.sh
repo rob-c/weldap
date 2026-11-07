@@ -49,6 +49,9 @@ rule "service: no console/debug/trace output" '(Console\.(Write|Error|Out)|Debug
 rule -i "service: no log template mentions a secret" 'LoggerMessage.*\{(password|verifier|secret|ct|enc|sealed)' "${CS[@]}"
 EXCEPT='AuditKind\.PasswordSet, uun\)' rule "service: no audit event built from a password variable" 'new AuditEvent\([^)]*([Pp]assword|[Vv]erifier)[^)]*\)' "${CS[@]}"
 rule "service: networking only in ServerClient.cs" 'using System\.Net' "${CS_NO_NET[@]}"
+# One exception: ServerClient resolves the configured server's own name (what TcpClient did implicitly), so each of
+# its addresses can get its own connect timeout.
+EXCEPT='ServerClient\.cs:[0-9]+:.*Dns\.GetHostAddressesAsync\(settings\.ServerHost, budget\)' \
 rule "service: no HTTP, DNS or raw sockets" '(HttpClient|WebRequest|WebClient|Dns\.|new Socket\(|UdpClient|TcpListener)' "${CS[@]}"
 EXCEPT='Import\("(advapi32|kernel32|netapi32|crypt32)\.dll"' rule "service: P/Invoke only into advapi32, kernel32, netapi32, crypt32" '(DllImport|LibraryImport)\(' "${CS[@]}"
 EXCEPT='weldap|Weldap|WELDAP' rule -i "service: no LDAP or directory knowledge on the client" '(ldap|memberof|[^a-z]dn[^a-z]|389)' "${CS[@]}"

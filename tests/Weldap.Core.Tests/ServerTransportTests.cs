@@ -235,12 +235,15 @@ public class ServerTransportTests
             () => ServerTransport.ExchangeAsync(stream, "{}"u8.ToArray(), Deadline, cts.Token));
     }
 
-    [Fact]
-    public async Task A_zero_deadline_means_no_timer()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task A_spent_deadline_is_no_answer(int ms)
     {
-        var body = "{\"v\":1}"u8.ToArray();
-        var result = await Exchange(new ScriptedStream(Frame(body)), deadline: TimeSpan.Zero);
-        Assert.Equal(body, result.Reply);
+        var stream = new ScriptedStream(Frame("{\"v\":1}"u8.ToArray()));
+        var result = await Exchange(stream, deadline: TimeSpan.FromMilliseconds(ms));
+        Assert.Null(result.Reply);
+        Assert.Equal("server: timeout", result.Why);
     }
 
     [Fact]

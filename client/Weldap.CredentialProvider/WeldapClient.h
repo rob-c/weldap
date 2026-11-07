@@ -14,6 +14,7 @@ enum WELDAP_RESULT
     WELDAP_RESULT_VALUE_OK = WELDAP_RESULT_OK,
     WELDAP_RESULT_VALUE_DENY = WELDAP_RESULT_DENY,
     WELDAP_RESULT_VALUE_ERROR = WELDAP_RESULT_ERROR,
+    WELDAP_RESULT_VALUE_ADOPT = WELDAP_RESULT_ADOPT,   // a pre-existing account: show the warning, offer consent
 };
 
 enum WELDAP_CLIENT_STATUS
@@ -41,21 +42,22 @@ struct WELDAP_REPLY
 // (the service applies the same rule and is the authority; this only avoids sending junk).
 HRESULT WeldapNormalizeUun(_In_opt_ PCWSTR pwzIn, _Out_writes_(cchOut) PWSTR pwzOut, size_t cchOut);
 
-// Encodes the v3 binary request into pbOut: scenario, uun and the sealed fields (no password).
-// Returns the byte count, or 0 on failure (buffer too small, bad field), with pbOut[0..cbOut) zeroed.
-size_t WeldapEncodeRequest(bool fUnlock, _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
+// Encodes the v3 binary request into pbOut: flags (WELDAP_FLAG_*: bit0 unlock, bit1 consent; a bool true/false is
+// unlock/logon), uun and the sealed fields (no password). Returns the byte count, or 0 on failure (buffer too
+// small, bad field, unknown flag), with pbOut[0..cbOut) zeroed.
+size_t WeldapEncodeRequest(BYTE bFlags, _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
                         _Out_writes_bytes_(cbOut) BYTE *pbOut, size_t cbOut);
 
-// Strictly parses a v3 binary reply. Returns false if malformed: ok needs a password, deny/error must have
-// none (and online mode).
+// Strictly parses a v3 binary reply. Returns false if malformed: ok needs a password; deny, error and adopt must
+// have none (and online mode).
 bool WeldapParseReply(_In_reads_bytes_(cb) const BYTE *pb, size_t cb, _Out_ WELDAP_REPLY *pReply);
 
 // Full exchange: connect (15 s overall deadline), verify the server is SYSTEM, send, read reply.
 // pwzUun must already be normalised. pReply is only meaningful when WELDAP_STATUS_REPLIED.
-WELDAP_CLIENT_STATUS WeldapAuthenticate(bool fUnlock, _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
+WELDAP_CLIENT_STATUS WeldapAuthenticate(BYTE bFlags, _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
                                   _Out_ WELDAP_REPLY *pReply);
 
 // Same, with the pipe name and deadline as parameters (for tests).
-WELDAP_CLIENT_STATUS WeldapAuthenticateEx(_In_ PCWSTR pwzPipeName, DWORD dwDeadlineMs, bool fUnlock,
+WELDAP_CLIENT_STATUS WeldapAuthenticateEx(_In_ PCWSTR pwzPipeName, DWORD dwDeadlineMs, BYTE bFlags,
                                     _In_ PCWSTR pwzUun, _In_ const WELDAP_SEALED *pSealed,
                                     _Out_ WELDAP_REPLY *pReply);

@@ -257,7 +257,7 @@ struct REF_REQUEST
 static bool RefParseRequest(const Bytes &m, REF_REQUEST *pr)
 {
     if (m.empty() || m.size() > 4096 || m[0] != 3 || m.size() < 3) return false;
-    if (m[1] > 1) return false;
+    if ((m[1] & ~0x03) != 0) return false;   // flags: bit0 unlock, bit1 consent
     size_t at = 2;
     auto take = [&](size_t n, Bytes *pField) -> bool {
         if (at + n > m.size()) return false;
@@ -318,7 +318,7 @@ struct REF_REPLY
 };
 
 // Reply: version(1)=3 result(1) mode(1) msgLen(1) message(UTF-16LE) pwLen(1) password(ASCII), nothing after;
-// result <= 2, mode <= 1, msgLen <= 200; ok: 1..64 bytes of 0x21..0x7E; deny/error: no password, mode 0.
+// result <= 3, mode <= 1, msgLen <= 200; ok: 1..64 bytes of 0x21..0x7E; deny/error/adopt: no password, mode 0.
 static bool RefParseReply(_In_reads_bytes_opt_(cb) const BYTE *pb, size_t cb, REF_REPLY *pr)
 {
     if (pb == nullptr || cb == 0 || cb > 4096) return false;
@@ -327,7 +327,7 @@ static bool RefParseReply(_In_reads_bytes_opt_(cb) const BYTE *pb, size_t cb, RE
     if (!avail(4)) return false;
     BYTE ver = pb[0], result = pb[1], mode = pb[2], msgLen = pb[3];
     i = 4;
-    if (ver != 3 || result > 2 || mode > 1 || msgLen > 200) return false;
+    if (ver != 3 || result > 3 || mode > 1 || msgLen > 200) return false;
     if (!avail(2u * msgLen)) return false;
     std::wstring message;
     for (size_t k = 0; k < msgLen; k++)
@@ -576,21 +576,21 @@ static WELDAP_SEALED MakeSealed(_In_z_ const char *pszKid, ULONG cbCt, unsigned 
 }
 
 // Encodes into a guarded buffer of exactly cbOut bytes pre-filled with 0xEE.
-static size_t EncodeGuarded(bool fUnlock, _In_opt_z_ PCWSTR pwzUun, _In_opt_ const WELDAP_SEALED *ps, size_t cbOut,
+static size_t EncodeGuarded(BYTE bFlags, _In_opt_z_ PCWSTR pwzUun, _In_opt_ const WELDAP_SEALED *ps, size_t cbOut,
                             Bytes *pOut, bool *pfZeroed)
 {
     BYTE *pb = g_pGuard->Space(cbOut, 0xEE);
 #pragma warning(suppress: 6387)   // deliberately passing null arguments to test the checks
-    size_t cb = WeldapEncodeRequest(fUnlock, pwzUun, ps, pb, cbOut);
+    size_t cb = WeldapEncodeRequest(bFlags, pwzUun, ps, pb, cbOut);
     if (pOut) *pOut = Of(pb, cb <= cbOut ? cb : 0);
     if (pfZeroed) *pfZeroed = AllZero(pb, cbOut);
     return cb;
 }
 
-static bool EncodeFails(bool fUnlock, _In_opt_z_ PCWSTR pwzUun, _In_opt_ const WELDAP_SEALED *ps, size_t cbOut = 600)
+static bool EncodeFails(BYTE bFlags, _In_opt_z_ PCWSTR pwzUun, _In_opt_ const WELDAP_SEALED *ps, size_t cbOut = 600)
 {
     bool fZeroed = false;
-    return EncodeGuarded(fUnlock, pwzUun, ps, cbOut, nullptr, &fZeroed) == 0 && fZeroed;
+    return EncodeGuarded(bFlags, pwzUun, ps, cbOut, nullptr, &fZeroed) == 0 && fZeroed;
 }
 
 static void TestEncode()
@@ -700,6 +700,19 @@ static void TestEncode()
         Check(EncodeGuarded(false, L"a", &smallest, needSmall, &got, nullptr) == needSmall, "encode: smallest request (%zu bytes) into exact buffer", needSmall);
         Check(EncodeFails(false, L"a", &smallest, needSmall - 1), "encode: smallest request, one byte short refused, buffer zeroed");
         Check(WeldapEncodeRequest(false, L"a", &smallest, g_pGuard->Space(1, 0xEE), 0) == 0, "encode: cbOut 0 refused");
+
+        // The flags byte: bit0 unlock, bit1 consent (the tile's Continue box), nothing else.
+        for (BYTE f : std::initializer_list<BYTE>{ 0, WELDAP_FLAG_SCENARIO_UNLOCK, WELDAP_FLAG_CONSENT,
+                                                    WELDAP_FLAG_SCENARIO_UNLOCK | WELDAP_FLAG_CONSENT })
+        {
+            REF_REQUEST r;
+            Check(EncodeGuarded(f, L"a", &smallest, 600, &got, nullptr) != 0 && got.size() > 1 && got[1] == f && RefParseRequest(got, &r),
+                  "encode: flags 0x%02x sent as is, accepted by the service's rules", static_cast<unsigned>(f));
+        }
+        for (BYTE f : std::initializer_list<BYTE>{ 0x04, 0x08, 0x80, 0xFF })
+        {
+            Check(EncodeFails(f, L"a", &smallest), "encode: unknown flag bits 0x%02x refused, buffer zeroed", static_cast<unsigned>(f));
+        }
     }
 
     // Rejections: each must return 0 and leave the output all zero.
@@ -859,9 +872,19 @@ static void TestParse()
     {
         Check(ParseRejects(ReplyBytes(ver, 1, 0, L"x", "")) && ParseRejects(ReplyBytes(ver, 0, 0, L"", "pw")), "parse: version %u rejected", static_cast<unsigned>(ver));
     }
-    for (BYTE res : std::initializer_list<BYTE>{ 3, 4, 0x80, 0xFF })
+    for (BYTE res : std::initializer_list<BYTE>{ 4, 5, 0x80, 0xFF })
     {
         Check(ParseRejects(ReplyBytes(3, res, 0, L"x", "")) && ParseRejects(ReplyBytes(3, res, 0, L"", "pw")), "parse: result %u rejected", static_cast<unsigned>(res));
+    }
+    // Adopt (3): the service's warning, never a password, always online mode.
+    {
+        WELDAP_REPLY r;
+        Bytes b = ReplyBytes(3, 3, 0, L"This PC already has a local account with your name.", "");
+        Check(WeldapParseReply(b.data(), b.size(), &r) && r.result == WELDAP_RESULT_VALUE_ADOPT && !r.fOffline &&
+              wcscmp(r.message, L"This PC already has a local account with your name.") == 0 && r.password[0] == L'\0',
+              "parse: adopt carries the warning and no password");
+        Check(ParseRejects(ReplyBytes(3, 3, 0, L"x", "pw")), "parse: adopt with a password rejected");
+        Check(ParseRejects(ReplyBytes(3, 3, 1, L"x", "")), "parse: adopt in offline mode rejected");
     }
     for (BYTE mode : std::initializer_list<BYTE>{ 2, 3, 0x80, 0xFF })
     {
@@ -1030,7 +1053,7 @@ static bool ReencodesConsistently(const Bytes &b, const WELDAP_REPLY &r)
 {
     if (b.size() < 5) return false;
     size_t msgLen = b[3];
-    if (r.result > WELDAP_RESULT_VALUE_ERROR || msgLen > WELDAP_MAX_REPLY_MESSAGE_CHARS) return false;
+    if (r.result > WELDAP_RESULT_VALUE_ADOPT || msgLen > WELDAP_MAX_REPLY_MESSAGE_CHARS) return false;
     if (r.message[msgLen] != L'\0' || r.message[WELDAP_MAX_REPLY_MESSAGE_CHARS] != L'\0') return false;
     size_t cchPw = wcsnlen(r.password, ARRAYSIZE(r.password));
     if (cchPw > WELDAP_MAX_LOCAL_PASSWORD_CHARS) return false;
@@ -1075,7 +1098,7 @@ static void FuzzParse()
             }
             else if (strategy == 1)
             {
-                BYTE result = static_cast<BYTE>(rng.Below(8) == 0 ? rng.Below(5) : rng.Below(3));
+                BYTE result = static_cast<BYTE>(rng.Below(8) == 0 ? rng.Below(6) : rng.Below(4));
                 BYTE mode = static_cast<BYTE>(rng.Below(6) == 0 ? rng.Below(3) : (result == 0 ? rng.Below(2) : 0));
                 size_t msgLen = rng.Below(10) == 0 ? rng.Below(256) : rng.Below(8);
                 std::wstring msg;
@@ -2431,7 +2454,7 @@ static const char *StatusName(WELDAP_CLIENT_STATUS s)
 }
 
 // Full path as the tile does it: seal (reads the server key from the registry) + pipe exchange.
-static int Call(bool fUnlock, _In_z_ PCWSTR pwzUun, _In_z_ PCWSTR pwzPassword)
+static int Call(bool fUnlock, bool fConsent, _In_z_ PCWSTR pwzUun, _In_z_ PCWSTR pwzPassword)
 {
     wchar_t uun[WELDAP_MAX_UUN_CHARS + 1];
     if (FAILED(WeldapNormalizeUun(pwzUun, uun, ARRAYSIZE(uun))))
@@ -2465,12 +2488,13 @@ static int Call(bool fUnlock, _In_z_ PCWSTR pwzUun, _In_z_ PCWSTR pwzPassword)
         return 1;
     }
     WELDAP_REPLY reply;
-    WELDAP_CLIENT_STATUS st = WeldapAuthenticate(fUnlock, uun, &sealed, &reply);
+    BYTE bFlags = static_cast<BYTE>((fUnlock ? WELDAP_FLAG_SCENARIO_UNLOCK : 0) | (fConsent ? WELDAP_FLAG_CONSENT : 0));
+    WELDAP_CLIENT_STATUS st = WeldapAuthenticate(bFlags, uun, &sealed, &reply);
     SecureZeroMemory(&sealed, sizeof(sealed));
     ULONGLONG ms = GetTickCount64() - t0;
-    static const char *c_results[] = { "ok", "deny", "error" };
+    static const char *c_results[] = { "ok", "deny", "error", "adopt" };
     printf("status=%s result=%s mode=%s local_password_chars=%zu seal_ms=%llu elapsed_ms=%llu\n", StatusName(st),
-           st == WELDAP_STATUS_REPLIED && reply.result <= WELDAP_RESULT_VALUE_ERROR ? c_results[reply.result] : "-",
+           st == WELDAP_STATUS_REPLIED && reply.result <= WELDAP_RESULT_VALUE_ADOPT ? c_results[reply.result] : "-",
            st == WELDAP_STATUS_REPLIED && reply.result == WELDAP_RESULT_VALUE_OK ? (reply.fOffline ? "offline" : "online") : "-",
            wcsnlen(reply.password, ARRAYSIZE(reply.password)), msSeal, ms);
     char utf8[1024];
@@ -2495,8 +2519,9 @@ int wmain(int argc, wchar_t **argv)
     }
     if (argc == 5 && wcscmp(argv[1], L"call") == 0)
     {
-        return Call(wcscmp(argv[2], L"unlock") == 0, argv[3], argv[4]);
+        // <logon|unlock>[+consent]: consent is the tile's Continue box, sent after an "adopt" reply.
+        return Call(wcsncmp(argv[2], L"unlock", 6) == 0, wcsstr(argv[2], L"+consent") != nullptr, argv[3], argv[4]);
     }
-    fwprintf(stderr, L"usage: WeldapClientTest selftest | seal <pub-b64> <aad> <password> | call <logon|unlock> <uun> <password>\n");
+    fwprintf(stderr, L"usage: WeldapClientTest selftest | seal <pub-b64> <aad> <password> | call <logon|unlock>[+consent] <uun> <password>\n");
     return 2;
 }

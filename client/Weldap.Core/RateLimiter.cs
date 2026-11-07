@@ -26,7 +26,10 @@ public sealed class RateLimiter(IClock clock)
         lock (_lock)
         {
             if (!_byUun.TryGetValue(uun, out var s)) return false;
-            if (clock.UtcNow < s.BlockedUntil) return true;
+            // Blocked for the lockout from when it began; a clock that has since stepped backwards (boot-time RTC
+            // corrected by NTP) lifts the block rather than stretching it by the size of the step.
+            var now = clock.UtcNow;
+            if (now < s.BlockedUntil && now >= s.BlockedUntil - Lockout) return true;
             // Not blocked now: drop the entry once it has nothing live left (a lapsed block clears its failures).
             if (s.Failures.Count == 0) _byUun.Remove(uun);
             return false;

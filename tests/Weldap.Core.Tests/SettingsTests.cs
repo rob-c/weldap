@@ -204,11 +204,47 @@ public class SettingsTextTests
     private static LoginSettings Good => TestSettings.Create();
 
     [Fact]
-    public void Validate_returns_the_same_settings()
+    public void Validate_returns_equal_settings_when_in_range()
     {
         var g = Good;
-        Assert.Same(g, SettingsText.Validate(g));
+        Assert.Equal(g, SettingsText.Validate(g));
     }
+
+    /// <summary>The documented ranges are enforced here (tested), not only in the registry reader (not).</summary>
+    [Theory]
+    [InlineData(-1, -5, 0, 0, 0, 1)]
+    [InlineData(0, 0, 1, 0, 0, 1)]
+    [InlineData(3650, 3650, 100, 3650, 3650, 100)]
+    [InlineData(99999, int.MaxValue, 101, 3650, 3650, 100)]
+    [InlineData(int.MinValue, 30, -7, 0, 30, 1)]
+    public void Validate_clamps_day_and_failure_counts(int offline, int idle, int failures, int wantOffline, int wantIdle, int wantFailures)
+    {
+        var v = SettingsText.Validate(Good with { MaxOfflineDays = offline, IdleDisableDays = idle, OfflineMaxFailures = failures });
+        Assert.Equal((wantOffline, wantIdle, wantFailures), (v.MaxOfflineDays, v.IdleDisableDays, v.OfflineMaxFailures));
+    }
+
+    /// <summary>The test server's real public password key (testdir), and near misses.</summary>
+    [Theory]
+    [InlineData("BKcCmrM2wYzb84goGFy7sbMv67ZYHJKd2lTdGd4ngCZirxqqWUAG4DLbV9HL3gbqbcXcRS2SKhvT3WQb7o0YZr4=", true)]
+    [InlineData("AKcCmrM2wYzb84goGFy7sbMv67ZYHJKd2lTdGd4ngCZirxqqWUAG4DLbV9HL3gbqbcXcRS2SKhvT3WQb7o0YZr4=", false)] // not 0x04
+    [InlineData("BKcCmrM2wYzb84goGFy7sbMv67ZYHJKd2lTdGd4ngCZirxqqWUAG4DLbV9HL3gbqbcXcRS2SKhvT3WQb7o0YZr4", false)]  // 87 chars
+    [InlineData("BKcCmrM2wYzb84goGFy7sbMv67ZYHJKd2lTdGd4ngCZirxqqWUAG4DLbV9HL3gbqbcXcRS2SKhvT3WQb7o0YZr4==", false)] // 89 chars
+    [InlineData("BKcCmrM2wYzb84goGFy7sbMv67ZYHJKd2lTdGd4ngCZirxqqWUAG4DLbV9HL3gbqbcXcRS2SKhvT3WQb7o0Y!!!=", false)] // not base64
+    [InlineData("BKcCmrM2wYzb84goGFy7sbMv67ZYHJKd2lTdGd4ngCZirxqqWUAG4DLbV9HL3gbqbcXcRS2SKhvT3WQb7o0YZr==", false)] // 64 bytes
+    [InlineData("", false)]
+    public void Server_key_must_be_an_uncompressed_p256_point(string key, bool valid) =>
+        Assert.Equal(valid, SettingsText.IsServerKey(key));
+
+    [Theory]
+    [InlineData("k1", true)]
+    [InlineData("2026-rotation-b", true)]
+    [InlineData("abcdefghijklmnopqrstuvwxyz012345", true)]   // 32
+    [InlineData("abcdefghijklmnopqrstuvwxyz0123456", false)] // 33
+    [InlineData("", false)]
+    [InlineData("K1", false)]
+    [InlineData("k_1", false)]
+    [InlineData("k 1", false)]
+    public void Key_id_is_what_the_pipe_carries(string kid, bool valid) => Assert.Equal(valid, SettingsText.IsKeyId(kid));
 
     [Theory]
     [InlineData(1)]

@@ -53,9 +53,12 @@ foreach ($f in @(Get-ChildItem -LiteralPath $destDir -Filter "$name.dll*" -Error
             $pending = "$($f.FullName).old-$([DateTime]::UtcNow.Ticks)"
             Move-Item -LiteralPath $f.FullName -Destination $pending -Force
         }
-        # MOVEFILE_DELAY_UNTIL_REBOOT = 4
-        [void][WeldapDev.Native]::MoveFileEx($pending, $null, 4)
-        Write-Host "in use: $pending will be deleted at the next reboot"
+        # MOVEFILE_DELAY_UNTIL_REBOOT = 4. [NullString]: a plain $null would be passed as "" (rename, not delete).
+        if ([WeldapDev.Native]::MoveFileEx($pending, [NullString]::Value, 4)) {
+            Write-Host "in use: $pending will be deleted at the next reboot"
+        } else {
+            Write-Warning "in use, and could not schedule $pending for deletion; delete it after a reboot"
+        }
     }
 }
 if ((Test-Path -LiteralPath $destDir) -and -not (Get-ChildItem -LiteralPath $destDir -Force)) {

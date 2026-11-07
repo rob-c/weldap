@@ -48,7 +48,7 @@ public sealed class LoginReply : IDisposable
 
     public ReplyResult Result { get; }
     /// <summary>Online vs offline sign-in. Meaningful only when <see cref="Result"/> is <see cref="ReplyResult.Ok"/>:
-    /// the Deny/Error factories always set Online, and <c>EncodeReply</c> writes the mode byte only in the Ok case.</summary>
+    /// the other factories set Online, and <c>EncodeReply</c> always writes the mode byte, as 0 unless Ok+Offline.</summary>
     public SignInMode Mode { get; }
     public string Message { get; }
     public char[]? LocalPassword { get; }
@@ -101,8 +101,8 @@ public static class ProtocolCodec
 
     /// <summary>
     /// Strict parse of a request:
-    /// version(1)=3 scenario(1)∈{0,1} uunLen(1)∈1..20 uun kidLen(1)∈1..32 kid enc(65) ctLen(u16 LE)∈17..272 ct
-    /// ts(u64 LE)&gt;0 rid(16) verifier(32), and nothing after. Returns null for anything else (the caller drops
+    /// version(1)=3 flags(1)⊆{bit0 unlock, bit1 consent} uunLen(1)∈1..20 uun kidLen(1)∈1..32 kid enc(65)
+    /// ctLen(u16 LE)∈17..272 ct ts(i64 LE)&gt;0 rid(16) verifier(32), and nothing after. Returns null for anything else (the caller drops
     /// the connection). The UUN is only checked for printable ASCII here; the handler applies the UUN rule.
     /// </summary>
     public static LoginRequest? TryParseRequest(ReadOnlySpan<byte> m)
@@ -226,6 +226,14 @@ public static class LocalPasswords
     public const int Length = 32;
 
     public static bool IsAllowed(char c) => All.Contains(c, StringComparison.Ordinal);
+
+    /// <summary>Exactly what <see cref="Generate"/> makes: the only stored password a reply may ever carry.</summary>
+    public static bool IsValid(ReadOnlySpan<char> password)
+    {
+        if (password.Length != Length) return false;
+        foreach (var c in password) if (!IsAllowed(c)) return false;
+        return true;
+    }
 
     /// <summary>A pinned buffer the caller zeroes.</summary>
     public static char[] Generate()

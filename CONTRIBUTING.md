@@ -36,8 +36,9 @@ make deny                # cargo-deny: advisories, licences, bans, sources of th
 
 Under the hood these call `tests/quality.sh`, which takes gate names so a local run and CI run the
 identical check — `tests/quality.sh <gate>...` where a gate is one of `paranoia budget protocol
-shellcheck client server deny imports`. The `protocol` gate checks that the wire constants agree across
-the C++, C# and Rust copies; the `imports` gate inspects the built provider DLL (and skips cleanly when
+installer shellcheck client server deny imports`. The `protocol` gate checks that the wire constants agree across
+the C++, C# and Rust copies; the `installer` gate checks that the MSI source is well-formed and keeps its safety
+properties (no Secure property, commit-phase purge, …); the `imports` gate inspects the built provider DLL (and skips cleanly when
 it is absent, e.g. in CI).
 
 If you use VS Code / Dev Containers, the `.devcontainer/` here provisions the SDK, Docker and Python

@@ -18,7 +18,8 @@ public static class AuditFormat
     public static AuditSeverity SeverityOf(AuditKind kind) => kind switch
     {
         AuditKind.Error => AuditSeverity.Error,
-        AuditKind.Deny or AuditKind.ServerUnreachable or AuditKind.CleanupSkipped => AuditSeverity.Warning,
+        AuditKind.Deny or AuditKind.ServerUnreachable or AuditKind.CleanupSkipped or AuditKind.WouldDisable
+            or AuditKind.DisableSkipped or AuditKind.DemotionSkipped => AuditSeverity.Warning,
         _ => AuditSeverity.Information,
     };
 

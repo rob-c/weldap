@@ -25,14 +25,20 @@ public static class ServerMessages
         w.WriteString("rid", Convert.ToBase64String(s.Rid));
     });
 
-    public static byte[] Status(IReadOnlyCollection<string> uuns) => Json(w =>
+    /// <summary>At most <see cref="MaxStatusUuns"/> names: the caller batches. Never silently truncated, since a name
+    /// left out of the request would read as "not a user".</summary>
+    public static byte[] Status(IReadOnlyCollection<string> uuns)
     {
-        w.WriteString("op", "status");
-        w.WriteNumber("v", 1);
-        w.WriteStartArray("uuns");
-        foreach (var u in uuns.Take(MaxStatusUuns)) w.WriteStringValue(u);
-        w.WriteEndArray();
-    });
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(uuns.Count, MaxStatusUuns);
+        return Json(w =>
+        {
+            w.WriteString("op", "status");
+            w.WriteNumber("v", 1);
+            w.WriteStartArray("uuns");
+            foreach (var u in uuns) w.WriteStringValue(u);
+            w.WriteEndArray();
+        });
+    }
 
     public static ServerAnswer ParseAuthReply(byte[] reply)
     {
@@ -52,7 +58,8 @@ public static class ServerMessages
                 _ => ServerAnswer.Failed("server: error"),
             };
         }
-        catch (JsonException)
+        // InvalidOperationException: a string that is not valid UTF-16 once unescaped (a lone surrogate escape).
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return ServerAnswer.Failed("server: malformed reply");
         }
@@ -80,7 +87,7 @@ public static class ServerMessages
             }
             return List("users") is { } users && List("admins") is { } admins ? new StatusSnapshot(users, admins) : null;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return null;
         }

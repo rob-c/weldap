@@ -10,7 +10,10 @@ Start-Transcript -Path "$state\build-tools.log" -Append
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 $ProgressPreference = 'SilentlyContinue'
 
-$nativeArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+# The OS architecture, not this process's: the guest agent that runs this script may be an emulated x64 process
+# on ARM64 Windows, and its PROCESSOR_ARCHITECTURE (inherited by PowerShell) would then say AMD64.
+$osArch = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').PROCESSOR_ARCHITECTURE
+$nativeArch = if ($osArch -eq 'ARM64') { 'arm64' } else { 'x64' }
 
 # Visual Studio 2022 Build Tools: C++ for x64 and ARM64, Windows 11 SDK.
 Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile "$dl\vs_BuildTools.exe"

@@ -21,6 +21,8 @@ internal sealed class EventLogAudit : IAudit
         });
     }
 
+    /// <summary>Never throws (the IAudit contract): a full or broken event log must not fail a sign-in, or leave a
+    /// local password the caller holds un-zeroed. An event that cannot be written is lost.</summary>
     public void Write(AuditEvent e)
     {
         var type = AuditFormat.SeverityOf(e.Kind) switch
@@ -29,6 +31,14 @@ internal sealed class EventLogAudit : IAudit
             AuditSeverity.Warning => EventLogEntryType.Warning,
             _ => EventLogEntryType.Information,
         };
-        EventLog.WriteEntry(Source, AuditFormat.Describe(e), type, (int)e.Kind);
+        try
+        {
+            EventLog.WriteEntry(Source, AuditFormat.Describe(e), type, (int)e.Kind);
+        }
+#pragma warning disable CA1031 // see above: availability of sign-in over completeness of the audit trail
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+        }
+#pragma warning restore CA1031
     }
 }
