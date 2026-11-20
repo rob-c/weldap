@@ -8,7 +8,7 @@
 # The runtime image is AlmaLinux 9 micro with every executable removed: glibc and config, the server binary, and
 # nothing an intruder could run (no shell, coreutils, package manager or openssl).
 
-FROM almalinux:10@sha256:5a4b41a427c9717be8f4ac2a32aa22efbae5f9124fbcb79a6765394f312acfe8 AS toolchain
+FROM almalinux:10@sha256:ccf217024b3d5e268cc208d1edb384a1edee6359370cf6ea1ecbc42254e57375 AS toolchain
 RUN dnf -y install rust cargo gcc && dnf clean all
 
 FROM toolchain AS build
@@ -31,7 +31,7 @@ ENV LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata CARGO_TARGET
 WORKDIR /src
 
 # Device CA: openssl + the weldap-ca script. Never on the serving host's network (compose runs it with none).
-FROM almalinux:10-minimal@sha256:dfc4e05e3965fc933f9e256eb2e63a7a7a1eb1a53fa951c39841f2069ff38530 AS ca
+FROM almalinux:10-minimal@sha256:61a5d87b6ef31f1db8ac1a6f24fe99bc90e93ecc1234c56a61fc5caf980d8a3b AS ca
 RUN microdnf -y install openssl && microdnf clean all \
     && echo 'weldap:x:10001:10001:WELDAP CA:/nonexistent:/sbin/nologin' >>/etc/passwd \
     && echo 'weldap:x:10001:' >>/etc/group
@@ -40,7 +40,7 @@ USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/weldap-ca"]
 
 # AlmaLinux 9 micro, stripped: user entry added, then every executable deleted (rm deletes itself last).
-FROM quay.io/almalinuxorg/9-micro:9@sha256:ae1fd0bbbe21c02a25c6f2db88277475e58baf9e8c6af26096b46c1c0601e699 AS rootfs
+FROM quay.io/almalinuxorg/9-micro:9@sha256:cdc3153f40cdde43f2927ba5ed2e39373a0d2ea4a03119a10f264f52008b4daa AS rootfs
 RUN echo 'weldap:x:10001:10001:WELDAP server:/nonexistent:/sbin/nologin' >>/etc/passwd \
     && echo 'weldap:x:10001:' >>/etc/group \
     && rm -rf /usr/sbin /usr/libexec /usr/local /var/cache /usr/share/doc /usr/share/man \
